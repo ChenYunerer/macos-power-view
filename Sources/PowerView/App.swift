@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     private var sizeObserver: AnyCancellable?
     private var savePosition: DispatchWorkItem?
     private var terminating = false
+    private var statusSymbol = "bolt.fill"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -36,14 +37,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         popover.behavior = .transient
         popover.animates = true
         popover.delegate = self
-        popover.contentViewController = NSHostingController(rootView: card)
         store.onUpdate = { [weak self] in self?.updateStatus() }
         fanControl.onUpdate = { [weak self] in self?.store.refresh() }
-        // Only layout-affecting changes resize the panel. Coalesce telemetry
-        // publications into one measurement, and never resize on slider input.
-        sizeObserver = store.objectWillChange
-            .merge(with: fanControl.$editing.removeDuplicates().map { _ in () },
-                   fanControl.$message.removeDuplicates().map { _ in () })
+        // Numeric telemetry does not change the card's height. Only measure
+        // when a section appears/disappears or variable-height text changes.
+        sizeObserver = Publishers.MergeMany([
+            store.$snapshot.map { $0 != nil }.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
+            store.$error.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
+            store.$fanState.map(\.controllable).removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
+            fanControl.$editing.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
+            fanControl.$message.removeDuplicates().map { _ in () }.eraseToAnyPublisher()
+        ])
             .debounce(for: .milliseconds(30), scheduler: RunLoop.main)
             .sink { [weak self] _ in self?.resizePanel() }
         store.setVisible(false)
@@ -58,13 +62,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     }
 
     private func updateStatus() {
+        guard let button = statusItem.button else { return }
         let value = store.snapshot?.primaryWatts.map { String(format: "%.1f W", $0) } ?? "— W"
-        statusItem.button?.title = " " + value
+        let title = " " + value
+        if button.title != title { button.title = title }
         let symbol = store.error != nil ? "exclamationmark.circle" : (store.snapshot?.connected == true ? "bolt.fill" : "battery.75percent")
-        statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "电源")
-        statusItem.button?.image?.isTemplate = true
-        statusItem.button?.toolTip = store.error ?? "Power View · \(store.snapshot?.status ?? "读取中") · \(value)"
-        statusItem.button?.setAccessibilityLabel(statusItem.button?.toolTip)
+        if statusSymbol != symbol {
+            statusSymbol = symbol
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "电源")
+            button.image?.isTemplate = true
+        }
+        let toolTip = store.error ?? "Power View · \(store.snapshot?.status ?? "读取中") · \(value)"
+        if button.toolTip != toolTip {
+            button.toolTip = toolTip
+            button.setAccessibilityLabel(toolTip)
+        }
     }
 
     @objc private func togglePopover() {
@@ -88,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         } else if popover.isShown {
             popover.performClose(nil)
         } else if let button = statusItem.button {
+            popover.contentViewController = NSHostingController(rootView: card)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             NSApp.activate(ignoringOtherApps: true)
             store.setVisible(true)
@@ -121,11 +134,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             panel.isReleasedWhenClosed = false
             panel.delegate = self
-            let content = NSHostingView(rootView: card)
-            // The delegate owns the frame and top-edge anchoring. Hosting
-            // min/max constraints otherwise resize the window behind its back.
-            content.sizingOptions = [.intrinsicContentSize]
-            panel.contentView = content
             if let screen = NSScreen.main {
                 panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.maxX - PowerCard.width - 24, y: screen.visibleFrame.maxY - 354))
             }
@@ -143,7 +151,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             }
             self.panel = panel
         }
-        resizePanel()
+        if !(panel?.contentView is NSHostingView<PowerCard>) {
+            let content = NSHostingView(rootView: card)
+            // The delegate owns the frame and top-edge anchoring.
+            content.sizingOptions = [.intrinsicContentSize]
+            panel?.contentView = content
+        }
+        resizePanel(force: true)
         keepPanelOnScreen()
         panel?.orderFrontRegardless()
         store.setVisible(true)
@@ -151,13 +165,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
     private func hidePanel() {
         panel?.orderOut(nil)
+        // Release SwiftUI/Charts subscriptions while hidden. The store keeps
+        // collecting ten-second samples and the fan session stays independent.
+        panel?.contentView = nil
         store.pinned = false
         UserDefaults.standard.set(false, forKey: "pinned")
         store.setVisible(popover.isShown)
     }
 
-    private func resizePanel() {
-        guard let panel, let view = panel.contentView else { return }
+    private func resizePanel(force: Bool = false) {
+        guard let panel, force || panel.isVisible, let view = panel.contentView else { return }
         let height = view.fittingSize.height
         guard height > 0, abs(panel.frame.height - height) > 0.5 else { return }
         var frame = panel.frame
@@ -188,7 +205,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
     func windowDidResize(_ notification: Notification) { windowDidMove(notification) }
 
-    func popoverDidClose(_ notification: Notification) { store.setVisible(store.pinned) }
+    func popoverDidClose(_ notification: Notification) {
+        popover.contentViewController = nil
+        store.setVisible(store.pinned)
+    }
     func applicationDidBecomeActive(_ notification: Notification) { loginLaunch.refresh() }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !terminating else { return .terminateLater }

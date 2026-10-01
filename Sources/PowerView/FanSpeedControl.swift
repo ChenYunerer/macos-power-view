@@ -68,6 +68,7 @@ struct FanSpeedControl: View {
         .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.primary.opacity(0.05), lineWidth: 0.5))
         .onAppear { draftRPM = clamped(control.selectedRPM) }
+        .onDisappear { control.selectedRPM = draftRPM }
         .onChange(of: control.selectedRPM) { _, value in draftRPM = clamped(value) }
         .onChange(of: state.minimum) { _, _ in draftRPM = clamped(draftRPM) }
         .onChange(of: state.maximum) { _, _ in draftRPM = clamped(draftRPM) }
