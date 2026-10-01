@@ -78,7 +78,7 @@ try:
             '--options', 'runtime', '--timestamp', str(target))
     requirement = f'anchor apple generic and certificate leaf[subject.OU] = "{team}" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
     for target in [helper, app]:
-        run('codesign', '--verify', '--strict', '-R', requirement, str(target))
+        run('codesign', '--verify', '--strict', '-R', '=' + requirement, str(target))
     run('codesign', '--verify', '--deep', '--strict', str(app))
 
     auth = ['--key', str(api_key), '--key-id', credentials['APPLE_NOTARY_KEY_ID'],
