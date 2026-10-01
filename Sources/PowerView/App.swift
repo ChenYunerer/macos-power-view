@@ -71,6 +71,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         loginLaunch.refresh()
         if NSApp.currentEvent?.type == .rightMouseUp {
             let menu = NSMenu()
+            menu.addItem(withTitle: AppVersion.menuTitle, action: nil, keyEquivalent: "")
+            menu.addItem(.separator())
             let pin = menu.addItem(withTitle: store.pinned ? "收起悬浮窗" : "固定为悬浮窗", action: #selector(contextTogglePin), keyEquivalent: "")
             pin.target = self
             menu.addItem(.separator())

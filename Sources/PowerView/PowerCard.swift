@@ -104,6 +104,8 @@ struct PowerCard: View {
             }
             iconButton(store.pinned ? "pin.fill" : "pin", label: store.pinned ? "取消固定" : "固定为悬浮窗", action: togglePin)
             Menu {
+                Text(AppVersion.menuTitle)
+                Divider()
                 Button("立即刷新", action: store.refresh)
                 Button(store.pinned ? "取消固定" : "固定为悬浮窗", action: togglePin)
                 Divider()
