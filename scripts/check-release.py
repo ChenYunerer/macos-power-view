@@ -35,11 +35,18 @@ if args[:3] == ['api','--method','PATCH']:
     print(json.dumps(s))
 elif args[0] == 'api':
     if '/releases/tags/' in args[1]:
-        if p.exists(): print(json.dumps(s))
+        if p.exists() and not s['draft']: print(json.dumps(s))
         else: print('HTTP 404', file=sys.stderr); sys.exit(1)
-    elif '/commits/' in args[1]: print(s.get('target_commitish', os.environ['GITHUB_SHA']))
+    elif '/releases?per_page=100' in args[1]:
+        assert '--paginate' in args and '--slurp' in args
+        print(json.dumps([[s] if p.exists() else []]))
+    elif '/commits/' in args[1]:
+        if s['draft']: print('HTTP 404', file=sys.stderr); sys.exit(1)
+        print(s.get('target_commitish', os.environ['GITHUB_SHA']))
     elif '/releases/latest' in args[1]: print('v9.0.0')
 elif args[:2] == ['release','create']:
+    assert not p.exists(), 'Cannot create a duplicate draft'
+    s['tag_name'] = args[2]
     s['target_commitish'] = args[args.index('--target')+1]
     s['html_url'] = 'https://example.test/release'
     p.write_text(json.dumps(s))

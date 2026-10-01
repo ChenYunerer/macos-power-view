@@ -10,7 +10,10 @@ import tempfile
 
 
 def gh(*args, check=True):
-    return subprocess.run(['gh', *args], text=True, capture_output=True, check=check)
+    result = subprocess.run(['gh', *args], text=True, capture_output=True)
+    if check and result.returncode:
+        raise SystemExit(result.stderr)
+    return result
 
 
 repo = os.environ['GH_REPO']
@@ -40,9 +43,21 @@ for line in (folder / 'SHA256SUMS.txt').read_text().splitlines():
 if checked != set(assets[:-1]):
     raise SystemExit('Checksum manifest must cover every release asset')
 
-existing = gh('api', f'repos/{repo}/releases/tags/{tag}', check=False)
-if existing.returncode == 0:
-    release = json.loads(existing.stdout)
+def find_release():
+    result = gh('api', f'repos/{repo}/releases/tags/{tag}', check=False)
+    if result.returncode == 0:
+        return json.loads(result.stdout)
+    if '404' not in result.stderr:
+        raise SystemExit(result.stderr)
+    # The tag endpoint only returns published releases. The authenticated list
+    # includes drafts, including drafts whose Git tag has not been created yet.
+    pages = json.loads(gh('api', f'repos/{repo}/releases?per_page=100',
+                          '--paginate', '--slurp').stdout)
+    return next((item for page in pages for item in page if item['tag_name'] == tag), None)
+
+
+release = find_release()
+if release is not None:
     # Never reuse a version for a different commit or silently overwrite a stable release.
     ref = gh('api', f'repos/{repo}/commits/{tag}', '--jq', '.sha', check=False)
     target = ref.stdout.strip() if ref.returncode == 0 else release['target_commitish']
@@ -54,9 +69,6 @@ if existing.returncode == 0:
         print(f'Already published: {release["html_url"]}')
         raise SystemExit(0)
 else:
-    # A network or authorization failure is not equivalent to a missing release.
-    if '404' not in existing.stderr:
-        raise SystemExit(existing.stderr)
     notes = f'''Apple Silicon · macOS 14 及以上
 
 - 提交：{sha}
@@ -74,7 +86,9 @@ else:
 gh('release', 'upload', tag, *map(str, assets), '--repo', repo, '--clobber')
 # Publish in one server-side update. GitHub chooses Latest by semantic version,
 # so parallel builds finishing out of order cannot force an older release Latest.
-release = json.loads(gh('api', f'repos/{repo}/releases/tags/{tag}').stdout)
+release = find_release()
+if release is None:
+    raise SystemExit('Uploaded release could not be found; rerun to resume the draft')
 result = gh('api', '--method', 'PATCH', f'repos/{repo}/releases/{release["id"]}',
             '-F', 'draft=false', '-F', 'prerelease=false', '-f', 'make_latest=legacy')
 print(json.loads(result.stdout)['html_url'])
