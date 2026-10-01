@@ -4,7 +4,7 @@
 
 ## 使用
 
-安装包见 [GitHub Releases](https://github.com/ChenYunerer/macos-power-view/releases/latest)。下载 DMG 后将应用拖入 Applications，或解压 ZIP 使用。当前仓库为私有，需要有仓库访问权限才能下载。
+安装包见 [GitHub Releases](https://github.com/ChenYunerer/macos-power-view/releases/latest)。下载 DMG 后将应用拖入 Applications，或解压 ZIP 使用。仓库公开，无需登录即可下载。
 
 双击 `dist/Power View.app` 启动。首次启动显示悬浮卡片，菜单栏显示当前瓦数。
 
