@@ -4,7 +4,7 @@ import PowerCore
 
 @MainActor
 final class PowerStore: ObservableObject {
-    static let refreshInterval: TimeInterval = 10
+    static let refreshInterval: TimeInterval = PowerHistory.sampleInterval
     @Published var snapshot: PowerSnapshot?
     @Published var temperatures = TemperatureSnapshot()
     @Published var fanRPM: Double?

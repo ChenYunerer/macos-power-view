@@ -148,10 +148,22 @@ struct PowerCoreChecks {
         var history = PowerHistory()
         let start = Date(timeIntervalSince1970: 1000)
         for i in 0..<1000 { history.append(watts: 10, at: start.addingTimeInterval(Double(i) / 10)) }
-        XCTAssertEqual(history.samples.count, 240)
+        XCTAssertEqual(history.samples.count, 10)
+        let lastID = history.samples.last!.id
+        history.append(watts: 12, at: start.addingTimeInterval(99.9))
+        XCTAssertEqual(history.samples.count, 10)
+        XCTAssertEqual(history.samples.last!.id, lastID)
+        XCTAssertEqual(history.samples.last!.watts, 12)
         history.append(watts: .nan, at: start.addingTimeInterval(100))
-        XCTAssertEqual(history.samples.count, 240)
-        history.append(watts: 20, at: start.addingTimeInterval(300))
+        XCTAssertEqual(history.samples.count, 10)
+        history.reset()
+        for i in 0...720 { history.append(watts: 10, at: start.addingTimeInterval(Double(i) * 10)) }
+        XCTAssertEqual(history.samples.count, 361)
+        XCTAssertEqual(history.samples.first!.date, start.addingTimeInterval(3600))
+        XCTAssertEqual(history.samples.last!.date, start.addingTimeInterval(7200))
+        history.append(watts: 20, at: start.addingTimeInterval(7200)) // Duplicate timestamps update only the last point.
+        XCTAssertEqual(history.samples.count, 361)
+        history.append(watts: 20, at: start.addingTimeInterval(10801)) // History expires across a long gap.
         XCTAssertEqual(history.samples.count, 1)
         history.append(watts: 30, at: start) // User sets the clock backwards.
         XCTAssertEqual(history.samples.count, 1)

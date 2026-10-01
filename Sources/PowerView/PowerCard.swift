@@ -186,7 +186,7 @@ struct PowerCard: View {
                 Text(s.connected ? "输入功率趋势" : "放电功率趋势")
                     .font(.system(size: 11, weight: .medium))
                 Spacer()
-                Text("最近 2 分钟").font(.system(size: 10)).foregroundStyle(.tertiary)
+                Text("最近 1 小时").font(.system(size: 10)).foregroundStyle(.tertiary)
             }
             if store.samples.count > 1 {
                 Chart(store.samples) { sample in
@@ -195,11 +195,11 @@ struct PowerCard: View {
                     LineMark(x: .value("时间", sample.date), y: .value("功率", sample.watts))
                         .foregroundStyle(accent.opacity(0.85)).lineStyle(StrokeStyle(lineWidth: 1.8, lineCap: .round))
                 }
-                .chartXScale(domain: s.date.addingTimeInterval(-120)...s.date)
+                .chartXScale(domain: s.date.addingTimeInterval(-PowerHistory.duration)...s.date)
                 .chartYScale(domain: 0...max(10, (store.samples.map(\.watts).max() ?? 10) * 1.2))
                 .chartXAxis(.hidden).chartYAxis(.hidden)
                 .frame(height: 32)
-                .accessibilityLabel("最近两分钟的功率变化")
+                .accessibilityLabel("最近一小时的功率变化")
             } else {
                 Text("正在采集功率趋势…")
                     .font(.system(size: 11)).foregroundStyle(.tertiary)
