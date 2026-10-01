@@ -1,6 +1,6 @@
 import AppKit
 
-// A single power symbol on a quiet macOS rounded tile.
+// A charged battery on a quiet macOS tile, legible down to Finder's smallest size.
 func drawIcon(in context: CGContext) {
     let tile = NSBezierPath(roundedRect: NSRect(x: 90, y: 90, width: 844, height: 844),
                             xRadius: 188, yRadius: 188)
@@ -11,16 +11,28 @@ func drawIcon(in context: CGContext) {
     tile.fill()
     context.restoreGState()
 
-    let mark = CGMutablePath()
-    mark.addArc(center: CGPoint(x: 512, y: 488), radius: 207,
-                startAngle: 125 * .pi / 180, endAngle: 415 * .pi / 180, clockwise: false)
-    mark.move(to: CGPoint(x: 512, y: 550))
-    mark.addLine(to: CGPoint(x: 512, y: 748))
-    context.setLineWidth(74)
-    context.setLineCap(.round)
-    context.setStrokeColor(NSColor(srgbRed: 0.50, green: 0.72, blue: 0.64, alpha: 1).cgColor)
-    context.addPath(mark)
-    context.strokePath()
+    // The separated terminal distinguishes the silhouette from a toggle switch.
+    let terminal = NSBezierPath(roundedRect: NSRect(x: 797, y: 459, width: 38, height: 106),
+                                xRadius: 15, yRadius: 15)
+    NSColor(srgbRed: 0.53, green: 0.72, blue: 0.66, alpha: 1).setFill()
+    terminal.fill()
+
+    let battery = NSBezierPath(roundedRect: NSRect(x: 211, y: 344, width: 552, height: 336),
+                               xRadius: 66, yRadius: 66)
+    let mint = NSGradient(starting: NSColor(srgbRed: 0.64, green: 0.81, blue: 0.74, alpha: 1),
+                          ending: NSColor(srgbRed: 0.46, green: 0.68, blue: 0.61, alpha: 1))!
+    mint.draw(in: battery, angle: -90)
+
+    let bolt = NSBezierPath()
+    bolt.move(to: NSPoint(x: 532, y: 630))
+    bolt.line(to: NSPoint(x: 401, y: 494))
+    bolt.line(to: NSPoint(x: 476, y: 494))
+    bolt.line(to: NSPoint(x: 449, y: 393))
+    bolt.line(to: NSPoint(x: 578, y: 531))
+    bolt.line(to: NSPoint(x: 503, y: 531))
+    bolt.close()
+    NSColor(srgbRed: 0.98, green: 0.99, blue: 0.97, alpha: 1).setFill()
+    bolt.fill()
 }
 
 let destination = CommandLine.arguments[1]
