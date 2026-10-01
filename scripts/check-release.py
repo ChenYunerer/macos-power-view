@@ -64,7 +64,10 @@ with tempfile.TemporaryDirectory() as temp:
     version = '1.0.2'; sha = 'a'*40
     for ext in ['zip', 'dmg']:
         (assets/f'Power-View-{version}-macOS-arm64.{ext}').write_bytes(b'package')
-    (assets/'build-info.json').write_text(json.dumps({'version':version,'commit':sha,'architecture':'arm64'}))
+    metadata = {'version':version, 'commit':sha, 'architecture':'arm64',
+                'signing':'developer-id', 'notarized':True, 'publisher':'Test Publisher',
+                'notarization':{'app':'app-request', 'dmg':'dmg-request'}}
+    (assets/'build-info.json').write_text(json.dumps(metadata))
     sums = [f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in sorted(assets.iterdir())]
     (assets/'SHA256SUMS.txt').write_text(''.join(sums))
     env = {**clean, 'PATH':str(bin_dir)+os.pathsep+os.environ['PATH'], 'GH_REPO':'owner/project',
@@ -74,6 +77,12 @@ with tempfile.TemporaryDirectory() as temp:
                            env=env, capture_output=True, text=True)
         assert (p.returncode == 0) == ok, p.stderr
         return p
+    for invalid in [dict(metadata, signing='ad-hoc'), dict(metadata, notarized=False),
+                    dict(metadata, notarized='true'), dict(metadata, notarization={'app':'only-app'})]:
+        (assets/'build-info.json').write_text(json.dumps(invalid))
+        publish(ok=False)
+        assert not (work/'calls.txt').exists()  # Unsigned/unnotarized assets never touch GitHub.
+    (assets/'build-info.json').write_text(json.dumps(metadata))
     publish()
     assert not json.loads((work/'gh-state.json').read_text())['draft']
     (work/'calls.txt').write_text('')
@@ -92,4 +101,4 @@ with tempfile.TemporaryDirectory() as temp:
     (work/'calls.txt').write_text('')
     publish(ok=False)
     assert not (work/'calls.txt').read_text()  # Fail before any API mutations.
-print('Passed release checks: versioning, reruns, draft recovery, exact commit, latest ordering, checksum rejection.')
+print('Passed release checks: signing/notarization gate, versioning, reruns, draft recovery, exact commit, latest ordering, checksum rejection.')

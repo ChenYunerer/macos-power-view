@@ -33,6 +33,10 @@ if not all(path.is_file() for path in assets):
 metadata = json.loads((folder / 'build-info.json').read_text())
 if metadata['version'] != version or metadata['commit'] != sha or metadata['architecture'] != 'arm64':
     raise SystemExit('Artifact provenance does not match this workflow run')
+if metadata.get('signing') != 'developer-id' or metadata.get('notarized') is not True:
+    raise SystemExit('Formal releases require Developer ID signing and Apple notarization')
+if not all(metadata.get('notarization', {}).get(kind) for kind in ('app', 'dmg')):
+    raise SystemExit('Missing app or DMG notarization request ID')
 checked = set()
 for line in (folder / 'SHA256SUMS.txt').read_text().splitlines():
     expected, name = line.split(maxsplit=1)
@@ -74,7 +78,8 @@ else:
 - 提交：{sha}
 - 下载 DMG 后将 Power View 拖入 Applications，或解压 ZIP 使用。
 - SHA256SUMS.txt 可用于校验下载文件。
-- 此版本使用 ad-hoc 签名，尚未经过 Apple Developer ID 签名和公证，首次打开可能受到 Gatekeeper 限制。
+- 此版本已使用 Developer ID 签名并通过 Apple 公证，应用与 DMG 均已附加公证票据。
+- 签名身份：{metadata['publisher']}。
 - 风扇手动控制需要管理员授权，目前限支持的单风扇 Apple Silicon 机型。
 '''
     with tempfile.NamedTemporaryFile(mode='w', suffix='.md') as note:

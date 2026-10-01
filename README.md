@@ -46,7 +46,7 @@
 
 辅助进程空闲时阻塞等待命令或超时，避免高频轮询。IPC 使用单调时钟计时。手动会话期间维持应用后台响应，但允许系统正常睡眠。恢复自动以回读自动 / 系统模式为准，系统重新给出的非零目标转速也是正常状态；若模式切换失败，不会将仍在手动模式的风扇目标写成零。
 
-本地 ad-hoc 构建通过 macOS Authorization Services 启动会话辅助进程，使用了已弃用的 `AuthorizationExecuteWithPrivileges`。这是本机开发版本的兼容实现；正式分发应迁移到使用 Developer ID 签名、公证和客户端身份校验的 `SMAppService` 辅助服务。密码由系统授权窗口处理，应用不读取或保存密码。界面中的“系统自动”只恢复本应用持有的控制会话。
+当前版本通过 macOS Authorization Services 启动会话辅助进程，使用了已弃用的 `AuthorizationExecuteWithPrivileges`。签名和公证不会改变这项实现；后续仍需迁移到带客户端身份校验的 `SMAppService` 辅助服务。密码由系统授权窗口处理，应用不读取或保存密码。界面中的“系统自动”只恢复本应用持有的控制会话。
 
 温度通过 IOKit 的 HID 传感器读取，已在本机 M1 上验证。CPU 使用 eACC / pACC 测点，GPU 使用 GPU MTR 测点，SSD 使用 NAND 测点，电池使用 gas gauge battery 测点；每类显示本次有效测点的最高温度，鼠标悬停可查看说明。过滤非有限值、零值和超出 (0, 125] °C 的异常值。接口或传感器缺失时显示 `—`，不会沿用过期读数。HID 温度接口不是稳定公开 API，不同机型与 macOS 版本的可用性可能不同。传感器命名参考 [Stats 的映射](https://github.com/exelban/stats/blob/master/Modules/Sensors/values.swift)。
 
@@ -67,7 +67,7 @@ open "dist/Power View.app"
 
 浮窗保存完整窗口框架，展开 / 收起后重启保持顶部位置；显示器移除或分辨率变化时将浮窗约束到可用屏幕范围。拖动时合并位置持久化写入。
 
-构建脚本生成本地 ad-hoc 签名应用，未做 Developer ID 公证。跨设备分发需要相应的签名与公证。
+本地 `build-app.sh` 默认生成 ad-hoc 签名应用；主分支自动发布另外执行 Developer ID 签名与 Apple 公证。本地默认构建不等同于正式下载版本。
 
 可直接检查原生读取结果：
 
@@ -86,9 +86,13 @@ open "dist/Power View.app"
 - 每次运行生成独立版本号：`VERSION` 文件的 patch 加上工作流 `run_number`。例如基线 `1.0.1` 的第一次运行发布 `v1.0.2`。PR 运行可能导致版本号跳号；同一次任务重跑使用同一版本号。
 - 构建完整提交对应的 ZIP、DMG、`SHA256SUMS.txt`、`build-info.json`，同时上传到 Actions Artifacts 和正式 GitHub Release（非草稿、非预发布）。每次主分支推送都独立构建，不取消较早任务。
 - 发布先创建草稿，附件全部上传成功后才转正式；中断后重跑可继续。已发布版本不会被重跑覆盖，版本标签绑定确切提交，Latest 由 GitHub 按版本规则选择。
-- 使用仓库自带 `GITHUB_TOKEN`，无需额外配置个人访问令牌；测试阶段仅有仓库读取权限，发布阶段才有内容写入权限。第三方 Actions 固定到提交 SHA。
+- 发布 GitHub Release 使用仓库自带 `GITHUB_TOKEN`；测试和签名阶段仅有仓库读取权限，发布阶段才有内容写入权限。第三方 Actions 固定到提交 SHA。
 
-当前产物使用 **ad-hoc 签名，未做 Apple Developer ID 签名和公证**。GitHub 的“正式 Release”不等于 Apple 公证，首次打开下载的应用可能受 Gatekeeper 限制。无需为 CI 提供管理员密码，密码始终由使用应用时的系统授权窗口处理。若后续需要免警告分发，应另行配置 Developer ID 签名、公证及正式辅助服务。
+主分支正式发布必须通过 **Developer ID 签名与 Apple 公证**。独立签名任务先给辅助程序和主应用开启 Hardened Runtime、添加安全时间戳，再公证应用、附加票据，生成 ZIP / DMG，最后签名并公证 DMG。应用和 DMG 都通过票据验证与 Gatekeeper 检查后才上传正式附件。`build-info.json` 记录签名主体、Team ID 和两个公证请求 ID；最终校验和在附加票据之后生成。缺少凭据、签名失败或公证未通过时均停止发布，不回退到 ad-hoc。旧版本不会因此自动获得公证。
+
+签名凭据配置在 GitHub Environment **`release-signing`** 的 Secrets 中，环境只允许 `main` / `master` 分支部署，PR 不进入签名任务。需要 `APPLE_CERTIFICATE_BASE64`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_NOTARY_KEY_BASE64`、`APPLE_NOTARY_KEY_ID`、`APPLE_NOTARY_ISSUER_ID` 五项。Base64 只用于传输，安全存储由 GitHub Secrets 提供；任何凭据均不得提交到仓库。
+
+签名使用临时钥匙串和仅当前用户可读的临时目录，仅允许系统签名工具访问私钥；结束、失败或取消时清理，并由 GitHub 销毁 runner。工作流不输出私钥或密码，也不上传临时目录。未签名的测试附件保留 1 天，正式附件保留 30 天，公证诊断保留 14 天。公证只代表 Apple 的签名和恶意内容检查，macOS 仍可能显示正常的首次打开确认；风扇控制仍需用户完成系统管理员授权。
 
 本地复现发布包：
 

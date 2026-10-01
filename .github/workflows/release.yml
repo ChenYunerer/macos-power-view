@@ -51,7 +51,56 @@ jobs:
         run: bash scripts/package-release.sh
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: power-view-${{ steps.version.outputs.tag }}
+          name: power-view-unsigned-${{ steps.version.outputs.tag }}
+          path: dist/releases/*
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  sign:
+    name: Developer ID signing and Apple notarization
+    needs: build
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    environment: release-signing
+    runs-on: macos-15
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: power-view-unsigned-${{ needs.build.outputs.tag }}
+          path: .build/unsigned
+      - name: Restore tested application bundle
+        env:
+          APP_VERSION: ${{ needs.build.outputs.version }}
+        run: ditto -x -k ".build/unsigned/Power-View-${APP_VERSION}-macOS-arm64.zip" dist
+      - name: Sign and notarize application and disk image
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: python3 scripts/sign-release.py
+      - name: Remove signing credentials
+        if: always()
+        run: |
+          if [ -d "$RUNNER_TEMP/power-view-signing" ]; then
+            security delete-keychain "$RUNNER_TEMP/power-view-signing/signing.keychain-db" || true
+            rm -rf "$RUNNER_TEMP/power-view-signing"
+          fi
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: notarization-logs-${{ needs.build.outputs.tag }}
+          path: .build/notarization/*.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: power-view-${{ needs.build.outputs.tag }}
           path: dist/releases/*
           if-no-files-found: error
           retention-days: 30
@@ -59,7 +108,7 @@ jobs:
 
   publish:
     name: Publish stable GitHub Release
-    needs: build
+    needs: [build, sign]
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     runs-on: ubuntu-24.04
     timeout-minutes: 10

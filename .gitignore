@@ -2,3 +2,8 @@
 dist/
 __pycache__/
 .DS_Store
+*.p12
+*.p8
+*.keychain-db
+AppleKEY.zip
+AppleKeyPwd.csv
