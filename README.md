@@ -1,0 +1,111 @@
+# Power View
+
+原生 macOS 菜单栏电源小工具。使用 SwiftUI、AppKit 和 Swift Charts，适用于 macOS 14 及以上的 Apple Silicon Mac 笔记本，无第三方依赖、无需 sudo。
+
+## 使用
+
+安装包见 [GitHub Releases](https://github.com/ChenYunerer/macos-power-view/releases/latest)。下载 DMG 后将应用拖入 Applications，或解压 ZIP 使用。当前仓库为私有，需要有仓库访问权限才能下载。
+
+双击 `dist/Power View.app` 启动。首次启动显示悬浮卡片，菜单栏显示当前瓦数。
+
+- 点击菜单栏瓦数打开电源卡片；已固定时，将悬浮窗显示在前面。
+- 点击图钉在菜单栏弹出卡片与悬浮窗之间切换。卡片上的文字、数值、图表和空白处均可拖动窗口，保持默认箭头光标，位置会保存；按钮、滑块和可选中的提示文本保留原有操作。
+- 点击悬浮窗右上角关闭按钮收起，应用继续在菜单栏运行。
+- 电源参数常驻显示为两项：左侧为协商功率，右侧合并显示输入电压 / 电流；底部显示最近更新时间，无需展开。
+- 功率趋势下方常驻显示 CPU、GPU、SSD、电池四列温度，与电源信息一起每 10 秒刷新。
+- 温度下方显示风扇实时转速。多风扇设备显示最高转速，`0 RPM` 表示停转，`—` 表示数据不可用。
+- 点击风扇行右侧调节按钮，拖动目标转速滑块后点击“应用转速”。首次应用会显示 macOS 管理员授权窗口。点击“系统自动”可交还控制。手动控制目前限定为已验证的 Apple Silicon 单风扇布局，范围从硬件读取（本机为 1199–7199 RPM）。其他布局仅提供监控。
+- 通过“更多选项”或右键菜单栏图标退出应用。
+- “更多选项”中的“登录时自动启动”使用 macOS 原生登录项管理，默认关闭；开关显示系统实际状态，可随时关闭。若系统要求批准，菜单会提供前往系统设置的入口。
+
+可以将应用拖进“应用程序”文件夹，再按需要开启登录时自动启动。
+
+## 设计
+
+使用系统字体、SF Symbols、NSVisualEffectView 原生毛玻璃、语义色和 304 pt 宽的紧凑布局，背景实时模糊窗口后方内容，自动跟随系统深浅色，并尊重“减少透明度”和“减少动态效果”。功率作为主读数，电量使用电池图标与百分比简洁呈现，分项功率、电源参数和趋势依次排列。控件提供辅助功能标签。
+
+## 数据与刷新
+
+直接通过 IOKit 读取 `AppleSmartBattery`，不依赖 Python 或启动 `ioreg` 子进程。菜单栏和悬浮窗均每 10 秒采样；打开卡片或手动刷新会立即读取，系统遥测有自己的更新周期。趋势只包含实际采集的数据，切换供电来源、从睡眠唤醒或读取恢复后重新采集。
+
+采样在后台执行，同一时间只进行一轮读取；1 秒内重复打开卡片复用最新数据。睡眠时停用采样定时器，唤醒后丢弃睡眠前未完成的结果并重新读取。趋势保留最近 2 分钟、最多 240 个点，系统时钟回拨时清空旧趋势。仅请求 CPU、GPU、SSD、电池对应的温度事件，并合并风扇转速与控制状态读取。
+
+接电时主读数为电脑端输入功率；拔电后为电池净放电功率。协商功率代表供电上限，不等于实际输入功率。输入读数不包含插座到电脑之间的转换损耗。部分设备或系统版本可能缺少遥测字段，缺失值显示为 `—`。断电后不使用可能残留的适配器遥测。
+
+这是菜单栏应用和可固定的浮动卡片，不是 WidgetKit 桌面扩展。
+
+## 风扇控制
+
+目标转速与实际转速分别显示，风扇达到目标可能需要时间。启动应用不会自动切换为手动模式，也不会恢复上次的手动设置。辅助进程校验硬件范围并回读控制模式与目标转速；固件拒绝设置时显示错误，不把失败当作成功。其他程序已接管风扇时拒绝覆盖。
+
+控制写入会有限次重试，并等待回读状态更新。授权辅助进程在打开 SMC 连接前初始化真实 / 有效 root 身份。失败时保留 SMC 键名、IOKit 与固件返回码，最近一次错误保存在 `~/Library/Logs/Power View/fan-control.log`，便于区分权限、写入拒绝与回读不一致；这些错误信息不包含密码。
+
+调速使用原生 AppKit 连续滑块，拖动仅更新局部预览，点击“应用”才写入硬件；两侧按钮提供 ±100 RPM 微调。拖动不会触发整张卡片或图表刷新，也不会不断重算浮窗尺寸。
+
+控制辅助进程只在用户授权后运行，不安装开机服务。应用每 5 秒维持一次控制连接；连接关闭、20 秒未收到心跳、应用正常退出或进入睡眠时会请求恢复系统自动。若恢复失败，会报告失败或继续有限次重试；辅助进程本身被强制终止等情况无法保证执行恢复。
+
+辅助进程空闲时阻塞等待命令或超时，避免高频轮询。IPC 使用单调时钟计时。手动会话期间维持应用后台响应，但允许系统正常睡眠。恢复自动以回读自动 / 系统模式为准，系统重新给出的非零目标转速也是正常状态；若模式切换失败，不会将仍在手动模式的风扇目标写成零。
+
+本地 ad-hoc 构建通过 macOS Authorization Services 启动会话辅助进程，使用了已弃用的 `AuthorizationExecuteWithPrivileges`。这是本机开发版本的兼容实现；正式分发应迁移到使用 Developer ID 签名、公证和客户端身份校验的 `SMAppService` 辅助服务。密码由系统授权窗口处理，应用不读取或保存密码。界面中的“系统自动”只恢复本应用持有的控制会话。
+
+温度通过 IOKit 的 HID 传感器读取，已在本机 M1 上验证。CPU 使用 eACC / pACC 测点，GPU 使用 GPU MTR 测点，SSD 使用 NAND 测点，电池使用 gas gauge battery 测点；每类显示本次有效测点的最高温度，鼠标悬停可查看说明。过滤非有限值、零值和超出 (0, 125] °C 的异常值。接口或传感器缺失时显示 `—`，不会沿用过期读数。HID 温度接口不是稳定公开 API，不同机型与 macOS 版本的可用性可能不同。传感器命名参考 [Stats 的映射](https://github.com/exelban/stats/blob/master/Modules/Sensors/values.swift)。
+
+## 开发
+
+需要 Swift 6 / Xcode Command Line Tools。构建产物仅包含 arm64（Apple Silicon），不包含 Intel 架构。
+
+```sh
+swift run PowerCoreChecks
+swift build --product PowerFanHelper
+python3 scripts/check-fan-helper.py
+bash scripts/check-fan-sensors.sh
+bash scripts/build-app.sh
+open "dist/Power View.app"
+```
+
+最低版本为 macOS 14；无风扇或多风扇机型不开放本项目的手动控制，缺失的温度数据显示 `—`。目前已实机验证 M1，其他 Apple 芯片机型仍需要实机验证。
+
+浮窗保存完整窗口框架，展开 / 收起后重启保持顶部位置；显示器移除或分辨率变化时将浮窗约束到可用屏幕范围。拖动时合并位置持久化写入。
+
+构建脚本生成本地 ad-hoc 签名应用，未做 Developer ID 公证。跨设备分发需要相应的签名与公证。
+
+可直接检查原生读取结果：
+
+```sh
+.build/release/PowerView --diagnose
+```
+
+原有 `power.py` 保持独立，可继续从终端使用。
+
+## 自动编译与发布
+
+[Build and Release](https://github.com/ChenYunerer/macos-power-view/actions/workflows/release.yml) 在 `main` 或 `master` 每次收到 push 时触发，包括直接提交和 PR 合并。PR 本身只测试和打包，不发布；也可从 Actions 手动运行主分支构建。
+
+- 使用 GitHub 的 `macos-15` Apple Silicon runner，产物只含 arm64，最低 macOS 14。
+- 先执行数据、SMC 模拟、辅助进程协议和发布流程回归检查，全部通过后才打包发布。云端不操作真实风扇，也不运行依赖真实电池的连续采样检查。
+- 每次运行生成独立版本号：`VERSION` 文件的 patch 加上工作流 `run_number`。例如基线 `1.0.1` 的第一次运行发布 `v1.0.2`。PR 运行可能导致版本号跳号；同一次任务重跑使用同一版本号。
+- 构建完整提交对应的 ZIP、DMG、`SHA256SUMS.txt`、`build-info.json`，同时上传到 Actions Artifacts 和正式 GitHub Release（非草稿、非预发布）。每次主分支推送都独立构建，不取消较早任务。
+- 发布先创建草稿，附件全部上传成功后才转正式；中断后重跑可继续。已发布版本不会被重跑覆盖，版本标签绑定确切提交，Latest 由 GitHub 按版本规则选择。
+- 使用仓库自带 `GITHUB_TOKEN`，无需额外配置个人访问令牌；测试阶段仅有仓库读取权限，发布阶段才有内容写入权限。第三方 Actions 固定到提交 SHA。
+
+当前产物使用 **ad-hoc 签名，未做 Apple Developer ID 签名和公证**。GitHub 的“正式 Release”不等于 Apple 公证，首次打开下载的应用可能受 Gatekeeper 限制。无需为 CI 提供管理员密码，密码始终由使用应用时的系统授权窗口处理。若后续需要免警告分发，应另行配置 Developer ID 签名、公证及正式辅助服务。
+
+本地复现发布包：
+
+```sh
+python3 scripts/check-release.py
+APP_VERSION=1.0.2 BUILD_NUMBER=1 bash scripts/build-app.sh
+bash scripts/package-release.sh
+```
+
+安装包生成在 `dist/releases/`。构建缓存、二进制、安装包和系统临时文件均不提交到 Git。
+
+风扇辅助进程模拟测试覆盖输入边界、自动模式、连接关闭、心跳超时与进程终止，不进行硬件写入。真实手动转速的验证需要用户完成系统管理员授权。
+
+SMC 传输模拟测试直接运行控制代码，覆盖延迟回读、暂时写入失败、写入已生效但返回错误、模式拒绝、目标不一致与回滚，以及诊断信息保留。
+
+稳定性检查还覆盖系统自动选择非零目标、模式恢复失败时保留手动转速、多风扇只读、异常 / 不完整协议输入、暂停进程后的心跳超时、趋势容量 / 时钟回拨与显示器边界。
+
+`swift run -c release PowerCoreChecks --benchmark` 输出分项采样耗时；`swift run -c release PowerCoreChecks --soak` 连续执行 1000 次只读采样。两者都不修改风扇控制。M1 本机一次 5 轮对比中，平均整轮读取约从 68 ms 降至 11 ms；这是采样延迟，不是 CPU 占用或所有机型的保证。
+
+设计参考：[Apple Materials](https://developer.apple.com/design/human-interface-guidelines/materials)、[Apple Widgets](https://developer.apple.com/design/human-interface-guidelines/widgets)。

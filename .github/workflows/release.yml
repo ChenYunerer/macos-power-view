@@ -1,0 +1,81 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Each push is built independently; newer commits never cancel an older release.
+concurrency:
+  group: power-view-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Test and package Apple Silicon
+    runs-on: macos-15
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Check build environment
+        run: |
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          swift --version
+      - name: Set release version
+        id: version
+        run: python3 scripts/release-version.py
+      - name: Build and run regression checks
+        run: |
+          swift build -c release --arch arm64
+          .build/release/PowerCoreChecks
+          bash scripts/check-fan-sensors.sh
+          python3 scripts/check-fan-helper.py .build/release/PowerFanHelper
+          python3 scripts/check-release.py
+      - name: Build application bundle
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ steps.version.outputs.build_number }}
+        run: bash scripts/build-app.sh
+      - name: Package ZIP, DMG and checksums
+        run: bash scripts/package-release.sh
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: power-view-${{ steps.version.outputs.tag }}
+          path: dist/releases/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  publish:
+    name: Publish stable GitHub Release
+    needs: build
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: power-view-${{ needs.build.outputs.tag }}
+          path: dist/releases
+      - name: Create or resume release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          APP_VERSION: ${{ needs.build.outputs.version }}
+        run: python3 scripts/publish-release.py
