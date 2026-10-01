@@ -7,6 +7,7 @@ import os
 import pathlib
 import re
 import secrets
+import shlex
 import shutil
 import signal
 import subprocess
@@ -32,6 +33,7 @@ if any(not os.environ.get(name) for name in required):
     raise SystemExit('Signing credentials missing; refusing to publish an unsigned release')
 # Keep credentials out of subprocess environments and logs.
 credentials = {name: os.environ.pop(name) for name in required}
+original_keychains = shlex.split(run('security', 'list-keychains', '-d', 'user'))
 work = pathlib.Path(os.environ.get('RUNNER_TEMP', tempfile.gettempdir())) / 'power-view-signing'
 work.mkdir(mode=0o700)  # Refuse to reuse an unexpected preexisting directory.
 keychain = work / 'signing.keychain-db'
@@ -52,6 +54,9 @@ try:
         path.chmod(0o600)
     password = secrets.token_urlsafe(32)
     run('security', 'create-keychain', '-p', password, str(keychain), sensitive=True)
+    # codesign still consults the search list to locate a certificate's private
+    # key, even when --keychain explicitly selects the signing identity.
+    run('security', 'list-keychains', '-d', 'user', '-s', str(keychain), *original_keychains)
     run('security', 'set-keychain-settings', '-lut', '3600', str(keychain))
     run('security', 'unlock-keychain', '-p', password, str(keychain), sensitive=True)
     run('security', 'import', str(certificate), '-P', credentials['APPLE_CERTIFICATE_PASSWORD'],
@@ -133,6 +138,7 @@ try:
         f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n' for path in assets))
     print('Signed, notarized, stapled and verified app + DMG.', flush=True)
 finally:
+    subprocess.run(['security', 'list-keychains', '-d', 'user', '-s', *original_keychains], capture_output=True)
     if keychain.exists():
         subprocess.run(['security', 'delete-keychain', str(keychain)], capture_output=True)
     shutil.rmtree(work)
