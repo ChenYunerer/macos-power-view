@@ -43,8 +43,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         // when a section appears/disappears or variable-height text changes.
         sizeObserver = Publishers.MergeMany([
             store.$snapshot.map { $0 != nil }.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
+            store.$snapshot.map { $0?.showsInputDetails }.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
             store.$error.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
-            store.$fanState.map(\.controllable).removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
+            store.$fans.map { $0.map(\.controllable) }.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
+            fanControl.$canRestore.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
             fanControl.$editing.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
             fanControl.$message.removeDuplicates().map { _ in () }.eraseToAnyPublisher()
         ])
@@ -237,9 +239,11 @@ enum PowerViewApplication {
                 let temperatures = TemperatureReader.read()
                 func display(_ value: Double?) -> String { value.map { String(format: "%.1f°C", $0) } ?? "unavailable" }
                 print("CPU=\(display(temperatures.cpu)) GPU=\(display(temperatures.gpu)) SSD=\(display(temperatures.ssd)) battery=\(display(temperatures.battery))")
-                let state = FanState.read()
-                print("fan=\(state.actualRPM.map { String(format: "%.0f RPM", $0) } ?? "unavailable")")
-                print("fanControl=\(state.controllable) manual=\(state.manual) range=\(state.minimum)...\(state.maximum) target=\(state.target ?? -1)")
+                let fans = FanState.readAll()
+                print("fanCount=\(fans.count)")
+                for state in fans {
+                    print("fan[\(state.id)] name=\(state.name ?? "unavailable") actual=\(state.actualRPM.map { String(format: "%.0f RPM", $0) } ?? "unavailable") controllable=\(state.controllable) manual=\(state.manual) range=\(state.minimum)...\(state.maximum) target=\(state.target ?? -1)")
+                }
             } catch { fputs("\(error.localizedDescription)\n", stderr); exit(1) }
             return
         }

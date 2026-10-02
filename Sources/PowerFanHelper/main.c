@@ -10,48 +10,61 @@
 #include <mach/mach_time.h>
 
 static volatile sig_atomic_t stopped = 0;
-static int simulation = 0, owned = 0;
+static int simulation = 0;
+static unsigned int simulatedOwned = 0;
 static void stop(int signalNumber) { stopped = 1; }
 static double now(void) {
     mach_timebase_info_data_t base;
     mach_timebase_info(&base);
     return (double)mach_continuous_time() * base.numer / base.denom / 1e9;
 }
+static unsigned int ownership(void) { return simulation ? simulatedOwned : PVFanControlMask(); }
+static int active(void) { return simulation ? simulatedOwned != 0 : PVFanControlIsActive(); }
 static int restore(void) {
-    if (!owned) return 0;
-    int result = simulation ? 0 : PVRestoreFanAutomatic();
-    if (!result) owned = 0;
-    return result;
+    if (simulation) { simulatedOwned = 0; return 0; }
+    return PVRestoreFanAutomatic(-1);
+}
+static void reply(int result) {
+    if (!result) printf("OK %u %d\n", ownership(), active());
+    else {
+        const char *detail = simulation ? "" : PVFanControlDiagnostic();
+        printf("ERR %d %u %d%s%s\n", result, ownership(), active(), detail[0] ? "|" : "", detail);
+    }
 }
 
 static int command(const char *line) {
-    if (!strcmp(line, "PING")) { puts("OK"); return 1; }
+    if (!strcmp(line, "PING")) { reply(0); return 1; }
     if (!strcmp(line, "AUTO") || !strcmp(line, "QUIT")) {
-        int result = restore();
-        if (result) printf("ERR %d\n", result); else puts("OK");
+        reply(restore());
         return strcmp(line, "QUIT") != 0;
+    }
+    if (!strncmp(line, "AUTO ", 5)) {
+        char *end;
+        errno = 0;
+        long fan = strtol(line + 5, &end, 10);
+        if (end == line + 5 || *end || errno || fan < 0 || fan >= PV_MAX_FANS || (simulation && fan >= 2)) reply(3);
+        else if (simulation) { simulatedOwned &= ~(1u << fan); reply(0); }
+        else reply(PVRestoreFanAutomatic((int)fan));
+        return 1;
     }
     if (!strncmp(line, "SET ", 4)) {
         char *end;
         errno = 0;
-        double rpm = strtod(line + 4, &end);
-        PVFanStatus state = simulation ? (PVFanStatus){0, 1199, 7199, 0, 1, 0, 1} : PVReadFanStatus();
-        if (end == line + 4 || *end || errno || !isfinite(rpm) || floor(rpm) != rpm
-            || !state.controllable || rpm < state.minimum || rpm > state.maximum) {
-            puts("ERR 3"); return 1;
-        }
-        if (!owned && state.mode == 1) { puts("ERR 5"); return 1; }
-        owned = 1; // Also covers partially applied changes that need rollback.
-        int result = simulation ? 0 : PVSetFanManual(rpm);
-        if (result) {
-            char detail[176];
-            snprintf(detail, sizeof(detail), "%s", PVFanControlDiagnostic());
-            int restored = restore();
-            printf("ERR %d%s%s\n", restored ? 6 : (result == 6 ? 4 : result), detail[0] ? "|" : "", detail);
-        } else puts("OK");
+        long fan = strtol(line + 4, &end, 10);
+        if (end == line + 4 || *end != ' ' || errno || fan < 0 || fan >= PV_MAX_FANS) { reply(3); return 1; }
+        const char *speed = end + 1;
+        double rpm = strtod(speed, &end);
+        if (end == speed || *end || errno || !isfinite(rpm) || floor(rpm) != rpm) { reply(3); return 1; }
+        int result;
+        if (simulation) {
+            double minimum = fan == 0 ? 1199 : 2317, maximum = fan == 0 ? 7199 : 7826;
+            result = fan >= 2 || rpm < minimum || rpm > maximum ? 3 : 0;
+            if (!result) simulatedOwned |= 1u << fan;
+        } else result = PVSetFanManual((int)fan, rpm);
+        reply(result);
         return 1;
     }
-    puts("ERR 7");
+    reply(7);
     return 1;
 }
 
@@ -98,13 +111,13 @@ int main(int argc, char **argv) {
             line[count++] = c;
         }
     }
-    int wasOwned = owned;
+    unsigned int wasOwned = ownership();
     int restored = restore();
     for (int attempt = 0; restored && attempt < 4; attempt++) {
         usleep(200000);
         restored = restore();
     }
-    if (simulation && wasOwned) puts("RESTORED_ON_EXIT");
+    if (simulation && wasOwned) printf("RESTORED_ON_EXIT %u\n", wasOwned);
     if (restored) fputs("Automatic fan restoration failed; check system fan control.\n", stderr);
     return restored ? 1 : 0;
 }

@@ -19,7 +19,7 @@ struct PowerCoreChecks {
                 let power = ProcessInfo.processInfo.systemUptime
                 _ = TemperatureReader.read()
                 let thermal = ProcessInfo.processInfo.systemUptime
-                _ = FanState.read()
+                _ = FanState.readAll()
                 let end = ProcessInfo.processInfo.systemUptime
                 print(String(format: "power=%.1fms temperatures=%.1fms fanState=%.1fms total=%.1fms",
                     (power-start)*1000, (thermal-power)*1000, (end-thermal)*1000, (end-start)*1000))
@@ -33,7 +33,7 @@ struct PowerCoreChecks {
                 autoreleasepool {
                     if (try? PowerReader.read()) != nil { validPower += 1 }
                     if TemperatureReader.read().cpu != nil { validCPU += 1 }
-                    if FanState.read().actualRPM != nil { validFan += 1 }
+                    if FanState.readAll().contains(where: { $0.actualRPM != nil }) { validFan += 1 }
                 }
             }
             print("1000 read-only samples: power=\(validPower) CPU=\(validCPU) fan=\(validFan), elapsed=\(ProcessInfo.processInfo.systemUptime - start)s")
@@ -43,12 +43,16 @@ struct PowerCoreChecks {
         checks.testConnectedUnitsAndCapacity()
         checks.testUnpluggedIgnoresCachedTelemetryAndDecodesSignedCurrent()
         checks.testInvalidInstantCurrentFallsBackAndMissingValuesStayUnknown()
+        checks.testSystemConsumptionExcludesChargingPower()
+        checks.testBatteryOnlyPresentation()
         checks.testTemperatureGroupsUseHottestValidMeasurement()
         checks.testUnavailableTemperatureDoesNotBecomeZero()
+        checks.testProcessorTemperatureFallback()
         checks.testFanControlRangeValidation()
+        checks.testIndependentFanOwnershipReplies()
         checks.testHistoryBoundsAndClockChanges()
         checks.testScreenChangesAndSmallDisplays()
-        print("Passed 8 checks (power, temperatures, fan bounds, history, display placement).")
+        print("Passed 12 checks (power/battery presentation, temperatures, fan bounds/ownership/names, history, display placement).")
     }
     func testConnectedUnitsAndCapacity() {
         let snapshot = PowerSnapshot(properties: [
@@ -92,6 +96,53 @@ struct PowerCoreChecks {
         XCTAssertNil(missing.batteryWatts)
     }
 
+    func testSystemConsumptionExcludesChargingPower() {
+        let charging = PowerSnapshot(properties: [
+            "ExternalConnected": true, "IsCharging": true,
+            "PowerTelemetryData": ["SystemPowerIn": 42000, "SystemLoad": 12000, "BatteryPower": 30000],
+        ])
+        XCTAssertEqual(charging.primaryWatts, 42)
+        XCTAssertEqual(charging.systemConsumptionWatts, 12)
+        let battery = PowerSnapshot(properties: [
+            "ExternalConnected": false, "Voltage": 12000, "InstantAmperage": -1000,
+            "PowerTelemetryData": ["SystemPowerIn": 42000, "SystemLoad": 30000],
+        ])
+        XCTAssertEqual(battery.systemConsumptionWatts, 12) // Ignore cached AC telemetry.
+        let unknown = PowerSnapshot(properties: [
+            "ExternalConnected": true, "PowerTelemetryData": ["SystemPowerIn": 42000],
+        ])
+        XCTAssertNil(unknown.systemConsumptionWatts) // Input power includes charging, so cannot substitute.
+        XCTAssertNil(PowerSnapshot(properties: [:]).systemConsumptionWatts)
+        for invalid in [Double.nan, .infinity, -1000] {
+            XCTAssertNil(PowerSnapshot(properties: ["ExternalConnected": true,
+                "PowerTelemetryData": ["SystemLoad": invalid]]).systemConsumptionWatts)
+        }
+        XCTAssertEqual(PowerSnapshot(properties: ["ExternalConnected": true,
+            "PowerTelemetryData": ["SystemLoad": 0]]).systemConsumptionWatts, 0)
+    }
+
+    func testBatteryOnlyPresentation() {
+        let battery = PowerSnapshot(properties: ["ExternalConnected": false,
+            "InstantAmperage": -1000, "Voltage": 12000,
+            "AdapterDetails": ["Watts": 90],
+            "PowerTelemetryData": ["SystemVoltageIn": 20000, "SystemCurrentIn": 2000, "BatteryPower": 30000]])
+        XCTAssertEqual(battery.showsInputDetails, false)
+        XCTAssertEqual(battery.batteryIsDischarging, true)
+        XCTAssertEqual(battery.batteryWatts, -12)
+        let unavailable = PowerSnapshot(properties: ["ExternalConnected": false])
+        XCTAssertEqual(unavailable.showsInputDetails, false)
+        XCTAssertEqual(unavailable.batteryIsDischarging, true)
+        XCTAssertNil(unavailable.batteryWatts)
+        let charging = PowerSnapshot(properties: ["ExternalConnected": true, "IsCharging": true,
+            "PowerTelemetryData": ["BatteryPower": 30000]])
+        XCTAssertEqual(charging.showsInputDetails, true)
+        XCTAssertEqual(charging.batteryIsDischarging, false)
+        let drainingOnAC = PowerSnapshot(properties: ["ExternalConnected": true,
+            "PowerTelemetryData": ["BatteryPower": -5000]])
+        XCTAssertEqual(drainingOnAC.showsInputDetails, true)
+        XCTAssertEqual(drainingOnAC.batteryIsDischarging, true)
+    }
+
     func testTemperatureGroupsUseHottestValidMeasurement() {
         let snapshot = TemperatureSnapshot(readings: [
             .init(name: "eACC MTR Temp Sensor0", celsius: 42),
@@ -129,6 +180,38 @@ struct PowerCoreChecks {
         XCTAssertNil(TemperatureSnapshot().cpu)
     }
 
+    func testProcessorTemperatureFallback() {
+        let hid = [TemperatureReading(name: "NAND CH0 temp", celsius: 39),
+                   TemperatureReading(name: "gas gauge battery", celsius: 28)]
+        let m4Pro = TemperatureSnapshot(readings: hid, fallbackCPU: 57.9, fallbackGPU: 53.1)
+        XCTAssertEqual(m4Pro.cpu, 57.9)
+        XCTAssertEqual(m4Pro.gpu, 53.1)
+        XCTAssertEqual(m4Pro.ssd, 39)
+        XCTAssertEqual(m4Pro.battery, 28)
+
+        let cpuOnly = TemperatureSnapshot(readings: hid + [.init(name: "pACC MTR Temp Sensor0", celsius: 42)],
+                                          fallbackCPU: 70, fallbackGPU: 53)
+        XCTAssertEqual(cpuOnly.cpu, 42)
+        XCTAssertEqual(cpuOnly.gpu, 53)
+        let gpuOnly = TemperatureSnapshot(readings: [.init(name: "GPU MTR Temp Sensor0", celsius: 45)],
+                                          fallbackCPU: 57, fallbackGPU: 80)
+        XCTAssertEqual(gpuOnly.cpu, 57)
+        XCTAssertEqual(gpuOnly.gpu, 45)
+
+        for invalid in [Double.nan, .infinity, -.infinity, 0, -1, 125.1] {
+            let missing = TemperatureSnapshot(readings: hid, fallbackCPU: invalid, fallbackGPU: invalid)
+            XCTAssertNil(missing.cpu)
+            XCTAssertNil(missing.gpu)
+            XCTAssertEqual(missing.ssd, 39)
+            XCTAssertEqual(missing.battery, 28)
+        }
+        XCTAssertEqual(TemperatureSnapshot(fallbackCPU: 125, fallbackGPU: 0.5).cpu, 125)
+        XCTAssertEqual(TemperatureSnapshot(fallbackCPU: 125, fallbackGPU: 0.5).gpu, 0.5)
+        // A failed next sample must not retain the previous SMC readings.
+        XCTAssertNil(TemperatureSnapshot(readings: hid).cpu)
+        XCTAssertNil(TemperatureSnapshot(readings: hid).gpu)
+    }
+
     func testFanControlRangeValidation() {
         let state = FanState(minimum: 1199, maximum: 7199, controllable: true)
         XCTAssertEqual(state.accepts(1199), true)
@@ -142,6 +225,30 @@ struct PowerCoreChecks {
         XCTAssertNil(FanState(actualRPM: .infinity).actualRPM)
         XCTAssertNil(FanState(actualRPM: -1).actualRPM)
         XCTAssertEqual(FanState(actualRPM: 0).actualRPM, 0)
+    }
+
+    func testIndependentFanOwnershipReplies() {
+        XCTAssertEqual(FanControlReply("OK 3 1")?.controlledFans, Set([0, 1]))
+        XCTAssertEqual(FanControlReply("OK 2 1")?.controlledFans, Set([1]))
+        XCTAssertEqual(FanControlReply("OK 0 0")?.needsRestore, false)
+        let partial = FanControlReply("ERR 6 2 1|F1Md readback=1 expected=0")
+        XCTAssertEqual(partial?.code, 6)
+        XCTAssertEqual(partial?.controlledFans, Set([1]))
+        XCTAssertEqual(partial?.needsRestore, true)
+        XCTAssertEqual(FanControlReply("ERR 6 0 1|Ftst readback=1 expected=0")?.needsRestore, true)
+        XCTAssertEqual(FanControlReply("OK 65535 1")?.controlledFans.count, 16)
+        for invalid in ["", "OK", "|", "ERR", "OK 1 0", "OK 65536 1", "OK -1 1", "OK 0 2",
+                        "ERR x 0 0", "ERR 0 0 0", "ERR 8 0 0", "OK 0 0 extra", "READY 0 0"] {
+            XCTAssertNil(FanControlReply(invalid))
+        }
+        let first = FanState(id: 0, minimum: 1199, maximum: 7199, controllable: true)
+        let second = FanState(id: 1, minimum: 2317, maximum: 7826, controllable: true)
+        XCTAssertEqual(first.accepts(2000), true)
+        XCTAssertEqual(second.accepts(2000), false)
+        XCTAssertEqual(second.id, 1)
+        XCTAssertEqual(FanState(id: 0, name: " Left side ").displayName, "Left side (1)")
+        XCTAssertEqual(FanState(id: 1, name: "  ").displayName, "风扇 2")
+        XCTAssertNil(FanState(id: 0, name: "").name)
     }
 
     func testHistoryBoundsAndClockChanges() {

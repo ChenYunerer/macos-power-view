@@ -80,7 +80,7 @@ else:
 - SHA256SUMS.txt 可用于校验下载文件。
 - 此版本已使用 Developer ID 签名并通过 Apple 公证，应用与 DMG 均已附加公证票据。
 - 签名身份：{metadata['publisher']}。
-- 风扇手动控制需要管理员授权，目前限支持的单风扇 Apple Silicon 机型。
+- 风扇手动控制需要管理员授权；支持的 Apple Silicon 机型可按风扇独立设置目标转速、恢复系统自动。
 '''
     with tempfile.NamedTemporaryFile(mode='w', suffix='.md') as note:
         note.write(notes)

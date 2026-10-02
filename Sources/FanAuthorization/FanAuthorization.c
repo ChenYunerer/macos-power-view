@@ -16,7 +16,7 @@ static int readLine(int fd, char *reply, size_t capacity) {
     if (capacity < 2) return -1;
     size_t count = 0;
     // Wall-clock changes must not lengthen or prematurely expire IPC waits.
-    uint64_t deadline = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) + 12000000000ULL;
+    uint64_t deadline = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) + 20000000000ULL;
     while (count < capacity - 1 && clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) < deadline) {
         struct pollfd p = { fd, POLLIN, 0 };
         int status = poll(&p, 1, 1000);

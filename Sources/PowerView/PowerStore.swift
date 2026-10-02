@@ -7,8 +7,7 @@ final class PowerStore: ObservableObject {
     static let refreshInterval: TimeInterval = PowerHistory.sampleInterval
     @Published var snapshot: PowerSnapshot?
     @Published var temperatures = TemperatureSnapshot()
-    @Published var fanRPM: Double?
-    @Published var fanState = FanState()
+    @Published var fans: [FanState] = []
     @Published var error: String?
     @Published var samples: [PowerSample] = []
     @Published var pinned = false
@@ -82,9 +81,9 @@ final class PowerStore: ObservableObject {
         reading = true
         let startedIn = generation
         Task {
-            let (result, thermal, fanState) = await Task.detached(priority: .utility) {
+            let (result, thermal, fans) = await Task.detached(priority: .utility) {
                 autoreleasepool {
-                    (Result { try PowerReader.read() }, TemperatureReader.read(), FanState.read())
+                    (Result { try PowerReader.read() }, TemperatureReader.read(), FanState.readAll())
                 }
             }.value
             reading = false
@@ -96,15 +95,14 @@ final class PowerStore: ObservableObject {
             }
             guard !sleeping, generation == startedIn else { return }
             temperatures = thermal
-            fanRPM = fanState.actualRPM
-            self.fanState = fanState
+            self.fans = fans
             lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
             switch result {
             case .success(let value):
                 if snapshot?.connected != value.connected || error != nil { history.reset() }
                 snapshot = value
                 error = nil
-                if let watts = value.primaryWatts {
+                if let watts = value.systemConsumptionWatts {
                     history.append(watts: watts, at: value.date)
                 } else {
                     history.reset()

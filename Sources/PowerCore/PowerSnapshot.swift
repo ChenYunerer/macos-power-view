@@ -25,6 +25,16 @@ public struct PowerSnapshot: Sendable {
         connected ? inputWatts : batteryWatts.map { max(0, -$0) }
     }
 
+    /// System load on AC; net battery discharge when running on battery.
+    public var systemConsumptionWatts: Double? {
+        guard let watts = connected ? systemWatts : primaryWatts,
+              watts.isFinite, watts >= 0 else { return nil }
+        return watts
+    }
+
+    public var showsInputDetails: Bool { connected || adapterWatts != nil || inputVolts != nil || inputAmps != nil }
+    public var batteryIsDischarging: Bool { !connected || (batteryWatts ?? 0) < 0 }
+
     public init(properties: [String: Any], date: Date = Date()) {
         self.date = date
         connected = properties["ExternalConnected"] as? Bool ?? false

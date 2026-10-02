@@ -27,12 +27,20 @@ public struct TemperatureSnapshot: Sendable {
 
     // Display the hottest valid current measurement for each component.
     // Sensor labels identify measurement locations, not individual core counts.
-    public init(readings: [TemperatureReading] = []) {
+    public init(readings: [TemperatureReading] = [], fallbackCPU: Double? = nil, fallbackGPU: Double? = nil) {
         var values = [Double?](repeating: nil, count: 4)
         for reading in readings {
             guard reading.celsius.isFinite, reading.celsius > 0, reading.celsius <= 125,
                   let index = Self.component(for: reading.name) else { continue }
             values[index] = max(values[index] ?? reading.celsius, reading.celsius)
+        }
+        // Preserve valid HID readings and fill only missing processor values
+        // with this sample's SMC readings. Never reuse a previous temperature.
+        for (index, fallback) in [fallbackCPU, fallbackGPU].enumerated() {
+            if values[index] == nil, let fallback,
+               fallback.isFinite, fallback > 0, fallback <= 125 {
+                values[index] = fallback
+            }
         }
         cpu = values[0]; gpu = values[1]; ssd = values[2]; battery = values[3]
     }
@@ -51,7 +59,10 @@ public enum TemperatureReader {
                 readings.pointee.append(TemperatureReading(name: String(cString: name), celsius: celsius))
             }, pointer)
         }
-        return TemperatureSnapshot(readings: readings)
+        let temperatures = TemperatureSnapshot(readings: readings)
+        guard temperatures.cpu == nil || temperatures.gpu == nil else { return temperatures }
+        let fallback = PVReadSMCProcessorTemperatures()
+        return TemperatureSnapshot(readings: readings, fallbackCPU: fallback.cpu, fallbackGPU: fallback.gpu)
     }
 }
 

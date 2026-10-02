@@ -43,7 +43,7 @@ struct PowerCard: View {
             if let snapshot = store.snapshot {
                 summary(snapshot)
                 metrics(snapshot)
-                electricalDetails(snapshot)
+                if snapshot.showsInputDetails { electricalDetails(snapshot) }
                 trend(snapshot)
                 temperatureRow
                 fanRow
@@ -162,8 +162,8 @@ struct PowerCard: View {
             metric(title: s.connected ? "系统耗电" : "外部输入",
                    symbol: s.connected ? "laptopcomputer" : "powerplug",
                    value: s.connected ? s.systemWatts : 0)
-            metric(title: (s.batteryWatts ?? 0) < 0 ? "电池放电" : "电池充电",
-                   symbol: (s.batteryWatts ?? 0) < 0 ? "battery.75percent" : "battery.100percent.bolt",
+            metric(title: s.batteryIsDischarging ? "电池放电" : "电池充电",
+                   symbol: s.batteryIsDischarging ? "battery.75percent" : "battery.100percent.bolt",
                    value: s.batteryWatts.map(abs))
         }
     }
@@ -185,29 +185,30 @@ struct PowerCard: View {
     private func trend(_ s: PowerSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
-                Text(s.connected ? "输入功率趋势" : "放电功率趋势")
+                Text("系统耗电趋势")
                     .font(.system(size: 11, weight: .medium))
                 Spacer()
                 Text("最近 1 小时").font(.system(size: 10)).foregroundStyle(.tertiary)
             }
             if store.samples.count > 1 {
                 Chart(store.samples) { sample in
-                    AreaMark(x: .value("时间", sample.date), y: .value("功率", sample.watts))
+                    AreaMark(x: .value("时间", sample.date), y: .value("系统耗电功率", sample.watts))
                         .foregroundStyle(LinearGradient(colors: [accent.opacity(0.18), accent.opacity(0.01)], startPoint: .top, endPoint: .bottom))
-                    LineMark(x: .value("时间", sample.date), y: .value("功率", sample.watts))
+                    LineMark(x: .value("时间", sample.date), y: .value("系统耗电功率", sample.watts))
                         .foregroundStyle(accent.opacity(0.85)).lineStyle(StrokeStyle(lineWidth: 1.8, lineCap: .round))
                 }
                 .chartXScale(domain: s.date.addingTimeInterval(-PowerHistory.duration)...s.date)
                 .chartYScale(domain: 0...max(10, (store.samples.map(\.watts).max() ?? 10) * 1.2))
                 .chartXAxis(.hidden).chartYAxis(.hidden)
                 .frame(height: 32)
-                .accessibilityLabel("最近一小时的功率变化")
+                .accessibilityLabel("最近一小时的系统耗电功率变化")
             } else {
-                Text("正在采集功率趋势…")
+                Text(s.systemConsumptionWatts == nil ? "系统耗电数据暂不可用" : "正在采集系统耗电趋势…")
                     .font(.system(size: 11)).foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, minHeight: 32)
             }
         }
+        .help("接电时显示系统耗电功率；使用电池时显示电池净放电功率。")
     }
 
     private func electricalDetails(_ s: PowerSnapshot) -> some View {
@@ -271,26 +272,64 @@ struct PowerCard: View {
     }
 
     private var fanRow: some View {
-        HStack {
-            Label("风扇", systemImage: "fan")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-            Text(store.fanState.manual ? "手动" : "自动")
-                .font(.system(size: 10)).foregroundStyle(.tertiary)
-            Spacer()
-            measurement(store.fanRPM.map { String(format: "%.0f", $0) }, unit: "RPM")
-            Button { fanControl.prepare(store.fanState) } label: {
-                Image(systemName: "slider.horizontal.3").font(.system(size: 12))
-                    .frame(width: 24, height: 24)
+        VStack(spacing: 8) {
+            HStack {
+                Label("风扇", systemImage: "fan")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                Spacer()
+                Button { fanControl.prepare(store.fans) } label: {
+                    Image(systemName: "slider.horizontal.3").font(.system(size: 12))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.borderless).help("风扇转速控制").accessibilityLabel("风扇转速控制")
+                .keepsMouseInteraction()
             }
-            .buttonStyle(.borderless).help("风扇转速控制").accessibilityLabel("风扇转速控制")
-            .keepsMouseInteraction()
+            ForEach(store.fans) { fan in
+                HStack {
+                    Text(fan.displayName).font(.system(size: 11)).lineLimit(1).help(fan.displayName)
+                    Text(fan.manual ? "手动" : "自动").font(.system(size: 10)).foregroundStyle(.tertiary)
+                    Spacer()
+                    measurement(fan.actualRPM.map { String(format: "%.0f", $0) }, unit: "RPM")
+                }
+                .accessibilityElement(children: .combine)
+            }
+            if store.fans.isEmpty {
+                Text("风扇数据暂不可用").font(.system(size: 11)).foregroundStyle(.secondary)
+            }
         }
         .padding(.horizontal, 2)
         .help("0 RPM 表示当前停转，— 表示未提供读数。点击右侧按钮调整控制方式。")
     }
 
     private var fanControls: some View {
-        FanSpeedControl(state: store.fanState, control: fanControl)
+        VStack(spacing: 8) {
+            if store.fans.count > 1 {
+                ScrollView {
+                    VStack(spacing: 8) {
+                        ForEach(store.fans) { fan in
+                            FanSpeedControl(state: fan, control: fanControl)
+                        }
+                    }
+                }
+                .frame(height: 320)
+                .keepsMouseInteraction()
+            } else if let fan = store.fans.first {
+                FanSpeedControl(state: fan, control: fanControl)
+            }
+            if store.fans.isEmpty {
+                Text("暂时无法读取风扇信息。")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            if fanControl.canRestore {
+                Button("全部恢复系统自动") { fanControl.automatic() }
+                    .disabled(fanControl.busy).keepsMouseInteraction()
+            }
+            if let message = fanControl.message {
+                Text(message).font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled).keepsMouseInteraction()
+            }
+        }
     }
 
     private func footer(_ s: PowerSnapshot) -> some View {

@@ -10,6 +10,15 @@ struct FanSpeedControl: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(state.displayName).font(.system(size: 11, weight: .medium)).lineLimit(1)
+                    .help(state.displayName)
+                Text(state.manual ? "手动" : "自动").font(.system(size: 10)).foregroundStyle(.secondary)
+                Spacer()
+                Text(state.actualRPM.map { String(format: "%.0f RPM", $0) } ?? "—")
+                    .font(.system(size: 11)).monospacedDigit()
+            }
+            .accessibilityElement(children: .combine)
             if state.controllable {
                 HStack(spacing: 8) {
                     Text("目标转速").font(.system(size: 11)).foregroundStyle(.secondary)
@@ -24,7 +33,7 @@ struct FanSpeedControl: View {
                     adjustment("plus", amount: 100)
                 }
                 VStack(spacing: 0) {
-                    FanSlider(value: $draftRPM, range: state.minimum...state.maximum,
+                    FanSlider(fanID: state.id, value: $draftRPM, range: state.minimum...state.maximum,
                               enabled: !control.busy)
                         .frame(height: 34)
                         .keepsMouseInteraction()
@@ -37,39 +46,36 @@ struct FanSpeedControl: View {
                     .padding(.horizontal, 2)
                 }
                 HStack {
-                    Button("系统自动", action: control.automatic)
-                        .disabled(control.busy || !control.canRestore)
+                    Button("系统自动") { control.automatic(fan: state.id) }
+                        .disabled(control.busy || !control.controlledFans.contains(state.id))
+                        .accessibilityLabel("风扇 \(state.id + 1) 恢复系统自动")
                         .keepsMouseInteraction()
                     Spacer()
                     if control.busy { ProgressView().controlSize(.mini) }
                     Button("应用") {
-                        control.selectedRPM = draftRPM
-                        control.apply(state)
+                        control.selectedRPM[state.id] = draftRPM
+                        control.apply(state, rpm: draftRPM)
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(control.busy || !state.accepts(draftRPM))
                     .help("应用目标转速；首次使用需管理员授权")
-                    .accessibilityLabel("应用转速")
+                    .accessibilityLabel("应用风扇 \(state.id + 1) 转速")
                     .keepsMouseInteraction()
                 }
                 .controlSize(.small)
-                if let message = control.message {
-                    Text(message).font(.system(size: 10)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                        .keepsMouseInteraction()
-                }
             } else {
-                Text("此机型暂不支持手动调速。")
+                Text("此风扇的控制信息不可用，暂不支持手动调速。")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
         }
         .padding(12)
         .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.primary.opacity(0.05), lineWidth: 0.5))
-        .onAppear { draftRPM = clamped(control.selectedRPM) }
-        .onDisappear { control.selectedRPM = draftRPM }
-        .onChange(of: control.selectedRPM) { _, value in draftRPM = clamped(value) }
+        .onAppear { draftRPM = clamped(control.selectedRPM[state.id] ?? 3000) }
+        .onDisappear { control.selectedRPM[state.id] = draftRPM }
+        .onChange(of: control.selectedRPM[state.id]) { _, value in
+            if let value { draftRPM = clamped(value) }
+        }
         .onChange(of: state.minimum) { _, _ in draftRPM = clamped(draftRPM) }
         .onChange(of: state.maximum) { _, _ in draftRPM = clamped(draftRPM) }
     }
@@ -88,7 +94,7 @@ struct FanSpeedControl: View {
         .buttonStyle(.plain)
         .keepsMouseInteraction()
         .disabled(control.busy || (amount < 0 ? draftRPM <= state.minimum : draftRPM >= state.maximum))
-        .accessibilityLabel(amount < 0 ? "降低 100 RPM" : "增加 100 RPM")
+        .accessibilityLabel("风扇 \(state.id + 1) " + (amount < 0 ? "降低 100 RPM" : "增加 100 RPM"))
         .help(amount < 0 ? "降低 100 RPM" : "增加 100 RPM")
     }
 }
@@ -97,6 +103,7 @@ struct FanSpeedControl: View {
 /// SwiftUI updates only the local numeric preview; it does not reposition the
 /// native knob during tracking or snap it to coarse steps on mouse-up.
 private struct FanSlider: NSViewRepresentable {
+    let fanID: Int
     @Binding var value: Double
     let range: ClosedRange<Double>
     let enabled: Bool
@@ -109,7 +116,7 @@ private struct FanSlider: NSViewRepresentable {
         slider.isContinuous = true
         slider.target = context.coordinator
         slider.action = #selector(Coordinator.changed(_:))
-        slider.setAccessibilityLabel("目标风扇转速")
+        slider.setAccessibilityLabel("风扇 \(fanID + 1) 目标转速")
         slider.setAccessibilityHelp("方向键调整转速，点击应用后生效")
         slider.focusRingType = .default
         return slider
