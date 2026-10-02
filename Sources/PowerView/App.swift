@@ -19,17 +19,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     private var sizeObserver: AnyCancellable?
     private var savePosition: DispatchWorkItem?
     private var terminating = false
-    private var statusSymbol = "bolt.fill"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // Reserve space for up to three power digits. Switching
+        // power sources or crossing a digit boundary must not resize the item.
+        statusItem = NSStatusBar.system.statusItem(withLength: 64)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "bolt.fill", accessibilityDescription: "电源")
-            button.image?.isTemplate = true
-            button.imagePosition = .imageLeading
+            button.imagePosition = .noImage
+            button.alignment = .center
             button.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-            button.title = " — W"
+            button.title = "— W"
             button.target = self
             button.action = #selector(togglePopover)
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -66,14 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     private func updateStatus() {
         guard let button = statusItem.button else { return }
         let value = store.snapshot?.primaryWatts.map { String(format: "%.1f W", $0) } ?? "— W"
-        let title = " " + value
-        if button.title != title { button.title = title }
-        let symbol = store.error != nil ? "exclamationmark.circle" : (store.snapshot?.connected == true ? "bolt.fill" : "battery.75percent")
-        if statusSymbol != symbol {
-            statusSymbol = symbol
-            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "电源")
-            button.image?.isTemplate = true
-        }
+        if button.title != value { button.title = value }
         let toolTip = store.error ?? "Power View · \(store.snapshot?.status ?? "读取中") · \(value)"
         if button.toolTip != toolTip {
             button.toolTip = toolTip
