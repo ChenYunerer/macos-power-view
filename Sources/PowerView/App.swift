@@ -22,9 +22,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        // 54 pt fits "999.9 W" at the 12 pt font below, including button insets.
         // Reserve space for up to three power digits. Switching
         // power sources or crossing a digit boundary must not resize the item.
-        statusItem = NSStatusBar.system.statusItem(withLength: 64)
+        statusItem = NSStatusBar.system.statusItem(withLength: 54)
         if let button = statusItem.button {
             button.imagePosition = .noImage
             button.alignment = .center
