@@ -1,43 +1,50 @@
 import AppKit
 
-// A charged battery on a quiet macOS tile, legible down to Finder's smallest size.
-func drawIcon(in context: CGContext) {
-    let tile = NSBezierPath(roundedRect: NSRect(x: 90, y: 90, width: 844, height: 844),
-                            xRadius: 188, yRadius: 188)
+// Package the approved glass-battery artwork deterministically. Image generation
+// is an authoring step only; builds use the checked-in master without networking.
+guard (2...3).contains(CommandLine.arguments.count) else {
+    fputs("Usage: swift scripts/make-icon.swift <resources-directory> [preview.png]\n", stderr)
+    exit(1)
+}
+let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+let sourceURL = root.appendingPathComponent("Assets/PowerIcon.source.png")
+guard let bitmap = NSBitmapImageRep(data: try Data(contentsOf: sourceURL)),
+      bitmap.pixelsWide == 1254, bitmap.pixelsHigh == 1254, bitmap.hasAlpha,
+      let cgImage = bitmap.cgImage else {
+    fputs("Expected the approved 1254 × 1254 RGBA icon master.\n", stderr)
+    exit(1)
+}
+let artwork = NSImage(cgImage: cgImage, size: NSSize(width: 1254, height: 1254))
+// The source includes presentation padding. Its ivory tile is placed on the
+// macOS icon grid; the vector silhouette keeps transparent edges clean at all sizes.
+let sourceTile = NSRect(x: 120, y: 140, width: 1016, height: 1008)
+
+func drawIcon(in context: CGContext, pixels: Int) {
+    let frame = NSRect(x: 90, y: 90, width: 844, height: 844)
+    let tile = NSBezierPath(roundedRect: frame, xRadius: 196, yRadius: 196)
     context.saveGState()
-    context.setShadow(offset: CGSize(width: 0, height: -8), blur: 16,
-                      color: NSColor.black.withAlphaComponent(0.08).cgColor)
-    NSColor(srgbRed: 0.98, green: 0.98, blue: 0.965, alpha: 1).setFill()
+    if pixels >= 128 {
+        // CGContext shadows use device pixels; do not let a full-size blur
+        // spread over tiny Finder icons or tint their transparent corners.
+        let scale = CGFloat(pixels) / 1024
+        context.setShadow(offset: CGSize(width: 0, height: -7 * scale), blur: 14 * scale,
+                          color: NSColor.black.withAlphaComponent(0.12).cgColor)
+    }
+    NSColor.white.setFill()
     tile.fill()
     context.restoreGState()
 
-    // The separated terminal distinguishes the silhouette from a toggle switch.
-    let terminal = NSBezierPath(roundedRect: NSRect(x: 797, y: 459, width: 38, height: 106),
-                                xRadius: 15, yRadius: 15)
-    NSColor(srgbRed: 0.53, green: 0.72, blue: 0.66, alpha: 1).setFill()
-    terminal.fill()
-
-    let battery = NSBezierPath(roundedRect: NSRect(x: 211, y: 344, width: 552, height: 336),
-                               xRadius: 66, yRadius: 66)
-    let mint = NSGradient(starting: NSColor(srgbRed: 0.64, green: 0.81, blue: 0.74, alpha: 1),
-                          ending: NSColor(srgbRed: 0.46, green: 0.68, blue: 0.61, alpha: 1))!
-    mint.draw(in: battery, angle: -90)
-
-    let bolt = NSBezierPath()
-    bolt.move(to: NSPoint(x: 532, y: 630))
-    bolt.line(to: NSPoint(x: 401, y: 494))
-    bolt.line(to: NSPoint(x: 476, y: 494))
-    bolt.line(to: NSPoint(x: 449, y: 393))
-    bolt.line(to: NSPoint(x: 578, y: 531))
-    bolt.line(to: NSPoint(x: 503, y: 531))
-    bolt.close()
-    NSColor(srgbRed: 0.98, green: 0.99, blue: 0.97, alpha: 1).setFill()
-    bolt.fill()
+    context.saveGState()
+    tile.addClip()
+    NSGraphicsContext.current?.imageInterpolation = .high
+    artwork.draw(in: frame, from: sourceTile, operation: .sourceOver, fraction: 1)
+    context.restoreGState()
 }
 
-let destination = CommandLine.arguments[1]
-let iconset = destination + "/AppIcon.iconset"
-try FileManager.default.createDirectory(atPath: iconset, withIntermediateDirectories: true)
+let destination = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
+try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+let iconset = destination.appendingPathComponent("AppIcon.iconset", isDirectory: true)
+try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 for size in [16, 32, 128, 256, 512] {
     for scale in [1, 2] {
         let pixels = size * scale
@@ -47,21 +54,22 @@ for size in [16, 32, 128, 256, 512] {
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
         let context = NSGraphicsContext.current!.cgContext
+        context.clear(CGRect(x: 0, y: 0, width: pixels, height: pixels))
         context.scaleBy(x: CGFloat(pixels) / 1024, y: CGFloat(pixels) / 1024)
-        drawIcon(in: context)
+        drawIcon(in: context, pixels: pixels)
         NSGraphicsContext.restoreGraphicsState()
         let png = bitmap.representation(using: .png, properties: [:])!
         let suffix = scale == 2 ? "@2x" : ""
-        try png.write(to: URL(fileURLWithPath: "\(iconset)/icon_\(size)x\(size)\(suffix).png"))
-        if pixels == 1024, CommandLine.arguments.count > 2 {
+        try png.write(to: iconset.appendingPathComponent("icon_\(size)x\(size)\(suffix).png"))
+        if pixels == 1024, CommandLine.arguments.count == 3 {
             try png.write(to: URL(fileURLWithPath: CommandLine.arguments[2]))
         }
     }
 }
 let process = Process()
 process.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
-process.arguments = ["-c", "icns", iconset, "-o", destination + "/PowerIcon.icns"]
+process.arguments = ["-c", "icns", iconset.path, "-o", destination.appendingPathComponent("PowerIcon.icns").path]
 try process.run()
 process.waitUntilExit()
 guard process.terminationStatus == 0 else { exit(process.terminationStatus) }
-try FileManager.default.removeItem(atPath: iconset)
+try FileManager.default.removeItem(at: iconset)
