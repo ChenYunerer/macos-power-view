@@ -102,7 +102,7 @@ struct PowerCard: View {
                 Image(systemName: "leaf.fill").foregroundStyle(.orange)
                     .help("低电量模式已开启").accessibilityLabel("低电量模式已开启")
             }
-            iconButton("arrow.clockwise", label: "立即刷新", action: store.refresh)
+            refreshButton
             iconButton(store.pinned ? "pin.fill" : "pin", label: store.pinned ? "取消固定" : "固定为悬浮窗", action: togglePin)
             Menu {
                 Text(AppVersion.menuTitle)
@@ -126,6 +126,41 @@ struct PowerCard: View {
             .help("更多选项").accessibilityLabel("更多选项")
             .keepsMouseInteraction()
             if store.pinned { iconButton("xmark", label: "收起悬浮窗", action: close) }
+        }
+    }
+
+    private var refreshButton: some View {
+        Button(action: store.refreshManually) {
+            Group {
+                switch store.manualRefreshPhase {
+                case .idle:
+                    Image(systemName: "arrow.clockwise")
+                case .refreshing:
+                    ProgressView().controlSize(.mini)
+                case .completed:
+                    Image(systemName: "checkmark").foregroundStyle(.green)
+                case .failed:
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                }
+            }
+            .font(.system(size: 11, weight: .medium))
+            .frame(width: 24, height: 26)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless).foregroundStyle(.secondary)
+        .disabled(store.manualRefreshPhase == .refreshing)
+        .help(refreshFeedback ?? "立即刷新所有读数")
+        .accessibilityLabel("立即刷新")
+        .accessibilityValue(refreshFeedback ?? "就绪")
+        .keepsMouseInteraction()
+    }
+
+    private var refreshFeedback: String? {
+        switch store.manualRefreshPhase {
+        case .idle: return nil
+        case .refreshing: return "刷新中…"
+        case .completed: return "已刷新"
+        case .failed: return "刷新失败"
         }
     }
 
@@ -341,6 +376,10 @@ struct PowerCard: View {
                     Text("每 \(Int(PowerStore.refreshInterval)) 秒刷新").font(.system(size: 10))
                 }.foregroundStyle(.secondary)
                 Spacer()
+                if let refreshFeedback {
+                    Text(refreshFeedback)
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                }
                 Text(s.date.formatted(date: .omitted, time: .standard))
                     .font(.system(size: 10)).monospacedDigit().foregroundStyle(.secondary)
                     .accessibilityLabel("最近更新 \(s.date.formatted(date: .omitted, time: .standard))")

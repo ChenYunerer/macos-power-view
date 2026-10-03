@@ -2,6 +2,10 @@ import AppKit
 import Combine
 import PowerCore
 
+enum ManualRefreshPhase {
+    case idle, refreshing, completed, failed
+}
+
 @MainActor
 final class PowerStore: ObservableObject {
     static let refreshInterval: TimeInterval = PowerHistory.sampleInterval
@@ -12,6 +16,7 @@ final class PowerStore: ObservableObject {
     @Published var samples: [PowerSample] = []
     @Published var pinned = false
     @Published var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+    @Published private(set) var manualRefreshPhase = ManualRefreshPhase.idle
     var onUpdate: (() -> Void)?
     private var timer: Timer?
     private var reading = false
@@ -19,6 +24,8 @@ final class PowerStore: ObservableObject {
     private var sleeping = false
     private var generation = 0
     private var pendingRefresh = false
+    private var pendingManualRefresh = false
+    private var feedbackReset: Task<Void, Never>?
     private var history = PowerHistory()
     private var wakeObserver: NSObjectProtocol?
     private var sleepObserver: NSObjectProtocol?
@@ -43,6 +50,10 @@ final class PowerStore: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.sleeping = true
+                self.pendingManualRefresh = false
+                self.feedbackReset?.cancel()
+                self.feedbackReset = nil
+                self.manualRefreshPhase = .idle
                 self.generation += 1
                 self.timer?.invalidate()
                 self.timer = nil
@@ -52,6 +63,7 @@ final class PowerStore: ObservableObject {
 
     deinit {
         timer?.invalidate()
+        feedbackReset?.cancel()
         for observer in [wakeObserver, sleepObserver].compactMap({ $0 }) {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
@@ -75,10 +87,34 @@ final class PowerStore: ObservableObject {
         self.timer = timer
     }
 
+    func refreshManually() {
+        guard !sleeping, manualRefreshPhase != .refreshing else { return }
+        feedbackReset?.cancel()
+        feedbackReset = nil
+        manualRefreshPhase = .refreshing
+        pendingManualRefresh = true
+        refresh()
+    }
+
+    private func finishManualRefresh() {
+        manualRefreshPhase = error == nil ? .completed : .failed
+        feedbackReset = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: 1_800_000_000) }
+            catch { return }
+            guard !Task.isCancelled else { return }
+            self?.manualRefreshPhase = .idle
+            self?.feedbackReset = nil
+        }
+    }
+
     func refresh() {
         guard !sleeping else { return }
         guard !reading else { pendingRefresh = true; return }
         reading = true
+        // If an automatic read is already running, the manual request belongs
+        // to the queued read, so feedback never claims completion too early.
+        let manualRefresh = pendingManualRefresh
+        pendingManualRefresh = false
         let startedIn = generation
         Task {
             let (result, thermal, fans) = await Task.detached(priority: .utility) {
@@ -115,6 +151,7 @@ final class PowerStore: ObservableObject {
                 samples = []
             }
             onUpdate?()
+            if manualRefresh { finishManualRefresh() }
         }
     }
 }
