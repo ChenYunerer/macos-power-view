@@ -117,6 +117,16 @@ struct PowerCard: View {
                     Button("取消自动启动请求") { loginLaunch.setEnabled(false) }
                 }
                 Divider()
+                if fanControl.usesPersistentService {
+                    if fanControl.serviceStatus == .requiresApproval {
+                        Button("在系统设置中批准风扇服务…", action: fanControl.openAuthorizationSettings)
+                    }
+                    if fanControl.serviceStatus == .enabled || fanControl.serviceStatus == .requiresApproval {
+                        Button("关闭风扇后台服务", action: fanControl.disableService)
+                            .disabled(fanControl.busy)
+                    }
+                    Divider()
+                }
                 Button("退出 Power View") { NSApplication.shared.terminate(nil) }
                     .keyboardShortcut("q")
             } label: {
@@ -338,6 +348,13 @@ struct PowerCard: View {
 
     private var fanControls: some View {
         VStack(spacing: 8) {
+            Text(fanControl.authorizationSummary)
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if fanControl.usesPersistentService && fanControl.serviceStatus == .requiresApproval {
+                Button("前往系统设置批准", action: fanControl.openAuthorizationSettings)
+                    .keepsMouseInteraction()
+            }
             if store.fans.count > 1 {
                 ScrollView {
                     VStack(spacing: 8) {

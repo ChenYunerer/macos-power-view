@@ -1,5 +1,7 @@
 import AppKit
 import FanAuthorization
+import FanService
+import ServiceManagement
 import PowerCore
 
 private enum FanControlFailure: LocalizedError {
@@ -26,42 +28,83 @@ private enum FanControlFailure: LocalizedError {
 
 private actor FanSession {
     private var session: OpaquePointer?
+    private var service: FanServiceConnection?
+    private var generation = 0
+    private var commandBusy = false
+    private var commandWaiters: [CheckedContinuation<Void, Never>] = []
     private(set) var controlledFans: Set<Int> = []
     private(set) var needsRestore = false
 
-    func setSpeed(_ rpm: Double, fan: Int, helper: String) throws {
-        if session == nil {
+    func setSpeed(_ rpm: Double, fan: Int, helper: String, team: String?) async throws {
+        await acquireCommand()
+        defer { releaseCommand() }
+        if let team, service == nil { service = FanServiceConnection(team: team) }
+        if team == nil && session == nil {
             var created: OpaquePointer?
             let result = PVOpenFanSession(helper, &created)
             guard result == 0, let created else { throw FanControlFailure.authorization(result) }
             session = created
         }
-        try command("SET \(fan) \(Int(rpm))")
+        try await command("SET \(fan) \(Int(rpm))")
     }
 
-    func heartbeat() throws { try command("PING") }
+    func heartbeat() async throws {
+        await acquireCommand()
+        defer { releaseCommand() }
+        try Task.checkCancellation()
+        try await command("PING")
+    }
 
-    @discardableResult func restore(fan: Int? = nil) throws -> Bool {
-        guard session != nil else { return false }
-        try command(fan.map { "AUTO \($0)" } ?? "AUTO")
+    @discardableResult func restore(fan: Int? = nil) async throws -> Bool {
+        await acquireCommand()
+        defer { releaseCommand() }
+        guard session != nil || service != nil else { return false }
+        try await command(fan.map { "AUTO \($0)" } ?? "AUTO")
         if !needsRestore { close() }
         return true
     }
 
     func close() {
+        generation += 1
+        service?.close()
+        service = nil
         if let session { PVCloseFanSession(session) }
         session = nil
         controlledFans = []
         needsRestore = false
     }
 
-    private func command(_ command: String) throws {
-        guard let session else { throw FanControlFailure.disconnected }
-        // The helper can include both SET and rollback diagnostics (384 bytes).
-        var reply = [CChar](repeating: 0, count: 512)
-        let result = PVFanSessionCommand(session, command, &reply, reply.count)
-        guard result == 0 else { close(); throw FanControlFailure.disconnected }
-        let response = String(cString: reply)
+    // An actor can re-enter while waiting for XPC. Preserve command/reply order
+    // so an old heartbeat cannot overwrite ownership returned by a newer SET.
+    private func acquireCommand() async {
+        if commandBusy {
+            await withCheckedContinuation { commandWaiters.append($0) }
+        } else { commandBusy = true }
+    }
+
+    private func releaseCommand() {
+        if commandWaiters.isEmpty { commandBusy = false }
+        else { commandWaiters.removeFirst().resume() }
+    }
+
+    private func command(_ command: String) async throws {
+        let response: String
+        let startedIn = generation
+        if let service {
+            do { response = try await service.execute(command) }
+            catch {
+                if generation == startedIn { close() }
+                throw error
+            }
+            guard generation == startedIn else { throw FanControlFailure.disconnected }
+        } else {
+            guard let session else { throw FanControlFailure.disconnected }
+            // The helper can include both SET and rollback diagnostics (384 bytes).
+            var reply = [CChar](repeating: 0, count: 512)
+            let result = PVFanSessionCommand(session, command, &reply, reply.count)
+            guard result == 0 else { close(); throw FanControlFailure.disconnected }
+            response = String(cString: reply)
+        }
         guard let status = FanControlReply(response) else { close(); throw FanControlFailure.disconnected }
         controlledFans = status.controlledFans
         needsRestore = status.needsRestore
@@ -85,6 +128,8 @@ final class FanControl: ObservableObject {
     @Published private(set) var controlledFans: Set<Int> = []
     @Published private(set) var canRestore = false
     @Published private(set) var message: String?
+    @Published private(set) var serviceStatus: SMAppService.Status = .notRegistered
+    private let registration = FanServiceRegistration()
     private let session = FanSession()
     private var pulse: Task<Void, Never>?
     private var controlActivity: NSObjectProtocol?
@@ -94,6 +139,7 @@ final class FanControl: ObservableObject {
     var onUpdate: (() -> Void)?
 
     init() {
+        refreshAuthorization()
         sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -117,6 +163,7 @@ final class FanControl: ObservableObject {
     }
 
     func prepare(_ fans: [FanState]) {
+        refreshAuthorization()
         for state in fans where state.controllable {
             let draft = selectedRPM[state.id] ?? (state.manual ? state.target : nil) ?? 3000
             selectedRPM[state.id] = min(state.maximum, max(state.minimum, draft))
@@ -131,8 +178,14 @@ final class FanControl: ObservableObject {
         suspendRequested = false
         Task {
             do {
+                if registration.team != nil { try await registration.prepare() }
+                guard !suspendRequested, !shuttingDown else {
+                    busy = false
+                    refreshAuthorization()
+                    return
+                }
                 let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/PowerFanHelper").path
-                try await session.setSpeed(rpm, fan: state.id, helper: helper)
+                try await session.setSpeed(rpm, fan: state.id, helper: helper, team: registration.team)
                 if suspendRequested { await restore() }
                 else { message = "风扇 \(state.id + 1) 已设为 \(Int(rpm)) RPM" }
             } catch {
@@ -140,6 +193,39 @@ final class FanControl: ObservableObject {
                 if suspendRequested { await restore() }
             }
             await updateOwnership()
+            refreshAuthorization()
+            busy = false
+            onUpdate?()
+        }
+    }
+
+    var usesPersistentService: Bool { registration.team != nil }
+    var authorizationSummary: String {
+        guard usesPersistentService else { return "本地构建：首次调速仍需管理员授权。正式签名版可启用持久风扇服务。" }
+        switch serviceStatus {
+        case .enabled: return "风扇服务已启用，重启软件无需重复授权。"
+        case .requiresApproval: return "等待系统批准风扇服务。批准后重新点击“应用”。"
+        case .notRegistered: return "首次调速需在系统设置中批准风扇服务，之后可重复使用。"
+        default: return "风扇服务未就绪，请重新安装完整的正式版应用。"
+        }
+    }
+
+    func refreshAuthorization() { serviceStatus = registration.status }
+    func openAuthorizationSettings() { registration.openSettings() }
+
+    func disableService() {
+        guard !busy, !shuttingDown else { return }
+        busy = true
+        Task {
+            stopHeartbeat()
+            do {
+                try await session.restore()
+                await session.close()
+                try await registration.disable()
+                message = "风扇服务已关闭，再次调速时可重新启用。"
+            } catch { message = error.localizedDescription }
+            await updateOwnership()
+            refreshAuthorization()
             busy = false
             onUpdate?()
         }
@@ -194,10 +280,12 @@ final class FanControl: ObservableObject {
                 guard !Task.isCancelled, let self else { return }
                 do { try await self.session.heartbeat() }
                 catch {
+                    guard !Task.isCancelled else { return }
                     self.stopHeartbeat()
                     self.controlledFans = []
                     self.canRestore = false
                     self.message = error.localizedDescription
+                    self.refreshAuthorization()
                     self.onUpdate?()
                     return
                 }

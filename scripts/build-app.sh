@@ -13,9 +13,11 @@ PY
 # Ship Apple Silicon only; no Intel slice or Rosetta dependency.
 swift build -c release --arch arm64
 APP="dist/Power View.app"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers" "$APP/Contents/Library/LaunchDaemons"
 cp .build/release/PowerView "$APP/Contents/MacOS/PowerView"
 cp .build/release/PowerFanHelper "$APP/Contents/Helpers/PowerFanHelper"
+cp .build/release/PowerFanDaemon "$APP/Contents/Helpers/PowerFanDaemon"
+cp Resources/local.yun.PowerView.FanService.plist "$APP/Contents/Library/LaunchDaemons/"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -47,5 +49,6 @@ PY
 swift scripts/make-icon.swift "$APP/Contents/Resources"
 rm -f "$APP/Contents/Resources/AppIcon.icns"
 codesign --force --sign - "$APP/Contents/Helpers/PowerFanHelper"
+codesign --force --sign - --identifier local.yun.PowerView.FanService "$APP/Contents/Helpers/PowerFanDaemon"
 codesign --force --sign - "$APP"
 echo "Built: $PWD/$APP"

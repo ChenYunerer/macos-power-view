@@ -73,13 +73,18 @@ try:
 
     app = ROOT / 'dist/Power View.app'
     helper = app / 'Contents/Helpers/PowerFanHelper'
-    for target in [helper, app]:
+    daemon = app / 'Contents/Helpers/PowerFanDaemon'
+    for target in [helper, daemon, app]:
         run('codesign', '--force', '--sign', identity, '--keychain', str(keychain),
             '--options', 'runtime', '--timestamp', str(target))
     requirement = f'anchor apple generic and certificate leaf[subject.OU] = "{team}" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
-    for target in [helper, app]:
+    for target in [helper, daemon, app]:
         run('codesign', '--verify', '--strict', '-R', '=' + requirement, str(target))
     run('codesign', '--verify', '--deep', '--strict', str(app))
+    # The XPC peers enforce these exact identifiers at runtime.
+    for target, identifier in [(app, 'local.yun.PowerView'), (daemon, 'local.yun.PowerView.FanService')]:
+        peer_requirement = requirement + f' and identifier "{identifier}" and !(entitlement["com.apple.security.get-task-allow"] exists)'
+        run('codesign', '--verify', '--strict', '-R', '=' + peer_requirement, str(target))
 
     auth = ['--key', str(api_key), '--key-id', credentials['APPLE_NOTARY_KEY_ID'],
             '--issuer', credentials['APPLE_NOTARY_ISSUER_ID']]

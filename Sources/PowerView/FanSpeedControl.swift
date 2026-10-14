@@ -58,7 +58,7 @@ struct FanSpeedControl: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(control.busy || !state.accepts(draftRPM))
-                    .help("应用目标转速；首次使用需管理员授权")
+                    .help(control.usesPersistentService ? "应用目标转速；首次使用需批准风扇服务" : "应用目标转速；首次使用需管理员授权")
                     .accessibilityLabel("应用风扇 \(state.id + 1) 转速")
                     .keepsMouseInteraction()
                 }

@@ -47,9 +47,8 @@ int PVOpenFanSession(const char *helperPath, PVFanSession **session) {
     }
     if (status == errAuthorizationSuccess) {
         char *arguments[] = { NULL };
-        // This session-only helper uses the native authorization dialog and
-        // installs no persistent service. Release signing is handled separately;
-        // migration to an authenticated SMAppService helper remains future work.
+        // Local ad-hoc builds retain the session-only authorization path.
+        // Developer ID builds use the authenticated SMAppService/XPC daemon.
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
         status = AuthorizationExecuteWithPrivileges(value->authorization, helperPath, 0, arguments, &value->pipe);

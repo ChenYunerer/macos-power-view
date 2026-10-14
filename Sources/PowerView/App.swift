@@ -49,7 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             store.$fans.map { $0.map(\.controllable) }.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
             fanControl.$canRestore.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
             fanControl.$editing.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
-            fanControl.$message.removeDuplicates().map { _ in () }.eraseToAnyPublisher()
+            fanControl.$message.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
+            fanControl.$serviceStatus.removeDuplicates().map { _ in () }.eraseToAnyPublisher()
         ])
             .debounce(for: .milliseconds(30), scheduler: RunLoop.main)
             .sink { [weak self] _ in self?.resizePanel() }
@@ -77,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
     @objc private func togglePopover() {
         loginLaunch.refresh()
+        fanControl.refreshAuthorization()
         if NSApp.currentEvent?.type == .rightMouseUp {
             let menu = NSMenu()
             menu.addItem(withTitle: AppVersion.menuTitle, action: nil, keyEquivalent: "")
@@ -205,7 +207,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         popover.contentViewController = nil
         store.setVisible(store.pinned)
     }
-    func applicationDidBecomeActive(_ notification: Notification) { loginLaunch.refresh() }
+    func applicationDidBecomeActive(_ notification: Notification) {
+        loginLaunch.refresh()
+        fanControl.refreshAuthorization()
+    }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !terminating else { return .terminateLater }
         terminating = true
@@ -228,6 +233,8 @@ enum PowerViewApplication {
     @MainActor static func main() {
         if CommandLine.arguments.contains("--diagnose") {
             do {
+                let authorization = FanServiceRegistration()
+                print("fanAuthorization=\(authorization.team == nil ? "temporary" : "persistent") serviceStatus=\(authorization.status.rawValue)")
                 let snapshot = try PowerReader.read()
                 print("connected=\(snapshot.connected) charging=\(snapshot.charging) battery=\(snapshot.percentage ?? -1)% input=\(snapshot.inputWatts ?? -1)W batteryPower=\(snapshot.batteryWatts ?? -1)W")
                 let temperatures = TemperatureReader.read()
