@@ -12,6 +12,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 os.chdir(ROOT)
@@ -25,6 +26,26 @@ def run(*args, sensitive=False):
             print(result.stderr)
         raise SystemExit(f'{pathlib.Path(args[0]).name} failed (exit {result.returncode})')
     return result.stdout
+
+
+def staple(action, target):
+    # Apple's ticket endpoint can disconnect after notarization is Accepted.
+    # Retry only transport errors; invalid/missing tickets still fail closed.
+    for attempt in range(4):
+        result = subprocess.run(['xcrun', 'stapler', action, str(target)],
+                                capture_output=True, text=True)
+        if result.returncode == 0:
+            return
+        output = result.stdout + result.stderr
+        transient = any(f'NSURLErrorDomain Code={code} ' in output
+                        for code in (-1001, -1005, -1009))
+        if not transient or attempt == 3:
+            print(output)
+            raise SystemExit(f'stapler {action} failed (exit {result.returncode})')
+        delay = 5 * (2 ** attempt)
+        print(f'stapler {action}: network error; retrying in {delay}s '
+              f'({attempt + 1}/3)', flush=True)
+        time.sleep(delay)
 
 
 required = ['APPLE_CERTIFICATE_BASE64', 'APPLE_CERTIFICATE_PASSWORD',
@@ -119,8 +140,8 @@ try:
     upload = work / 'Power-View.zip'
     run('ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', str(app), str(upload))
     app_request = notarize(upload, 'app')
-    run('xcrun', 'stapler', 'staple', str(app))
-    run('xcrun', 'stapler', 'validate', str(app))
+    staple('staple', app)
+    staple('validate', app)
     run('spctl', '--assess', '--type', 'execute', '--verbose=2', str(app))
 
     # ZIP now contains the stapled app; package the same app into the DMG.
@@ -132,8 +153,8 @@ try:
     dmg = output / f'{basename}.dmg'
     run('codesign', '--force', '--sign', identity, '--keychain', str(keychain), '--timestamp', str(dmg))
     dmg_request = notarize(dmg, 'dmg')
-    run('xcrun', 'stapler', 'staple', str(dmg))
-    run('xcrun', 'stapler', 'validate', str(dmg))
+    staple('staple', dmg)
+    staple('validate', dmg)
     run('spctl', '--assess', '--type', 'open', '--context', 'context:primary-signature', '--verbose=2', str(dmg))
     metadata.update(signing='developer-id', notarized=True, team_id=team,
                     publisher=publisher, notarization={'app': app_request, 'dmg': dmg_request})
