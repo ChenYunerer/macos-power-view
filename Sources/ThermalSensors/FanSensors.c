@@ -22,7 +22,8 @@ typedef struct {
 } SMCPacket;
 _Static_assert(sizeof(SMCPacket) == 80, "Unexpected SMC packet layout");
 
-static _Thread_local char diagnostic[176];
+// Room for both the SET failure and its rollback failure in one reply.
+static _Thread_local char diagnostic[384];
 const char *PVFanControlDiagnostic(void) { return diagnostic; }
 
 static uint32_t keyCode(const char *s) {
@@ -282,17 +283,21 @@ static int writeWithRetry(io_connect_t connection, const char *key, double value
     diagnostic[0] = 0;
     // Every fan gets at least one restoration attempt, even if earlier fans
     // exhausted the shared retry budget. Total retries do not scale with count.
-    for (int attempt = 0; attempt < 10; attempt++) {
-        int written = writeNumber(connection, key, value);
+    for (;;) {
+        writeNumber(connection, key, value);
         double actual = readNumber(connection, key);
         if (matchesValue(key, actual, value)) { diagnostic[0] = 0; return 1; }
-        if (written || clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) >= deadline) break;
-        if (attempt < 9) usleep(50000);
-    }
-    for (int attempt = 0; attempt < 10 && clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) < deadline; attempt++) {
-        usleep(50000);
-        double actual = readNumber(connection, key);
-        if (matchesValue(key, actual, value)) { diagnostic[0] = 0; return 1; }
+        // Allow delayed readback to settle before rewriting. A successful I/O
+        // return alone does not mean thermalmonitord accepted the new value.
+        for (int poll = 0; poll < 5; poll++) {
+            uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+            if (now >= deadline) break;
+            useconds_t remaining = (useconds_t)((deadline - now + 999) / 1000);
+            usleep(remaining < 50000 ? remaining : 50000);
+            actual = readNumber(connection, key);
+            if (matchesValue(key, actual, value)) { diagnostic[0] = 0; return 1; }
+        }
+        if (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) >= deadline) break;
     }
     if (!diagnostic[0]) snprintf(diagnostic, sizeof(diagnostic), "%s readback=%.0f expected=%.0f", key, readNumber(connection, key), value);
     return 0;
@@ -359,7 +364,12 @@ int PVSetFanManual(int fan, double rpm) {
     memcpy(ownedModeKeys[fan], modeKey, sizeof(modeKey));
     // Track ownership before a write that may apply despite an error return.
     controlledFans |= 1u << fan;
-    int enabled = writeWithRetry(connection, modeKey, 1, controlDeadline());
+    // Share one SET budget across unlock, mode and target writes. With the
+    // separate 4 s rollback budget this stays below the client's 20 s IPC wait,
+    // excluding time blocked inside IOKit itself.
+    uint64_t started = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    uint64_t deadline = started + 12000000000ULL;
+    int enabled = writeWithRetry(connection, modeKey, 1, started + 500000000ULL);
     if (!enabled) {
         double thermal = readNumber(connection, "Ftst");
         int unlocked = thermal == 1;
@@ -368,9 +378,9 @@ int PVSetFanManual(int fan, double rpm) {
             unlocked = writeWithRetry(connection, "Ftst", 1, controlDeadline());
             if (unlocked) usleep(3000000);
         }
-        if (unlocked) enabled = writeWithRetry(connection, modeKey, 1, controlDeadline());
+        if (unlocked) enabled = writeWithRetry(connection, modeKey, 1, deadline);
     }
-    int speedOK = enabled && writeWithRetry(connection, targetKey, rpm, controlDeadline());
+    int speedOK = enabled && writeWithRetry(connection, targetKey, rpm, deadline);
     double mode = readNumber(connection, modeKey), target = readNumber(connection, targetKey);
     IOServiceClose(connection);
     if (speedOK && mode == 1 && isfinite(target) && fabs(target - rpm) <= 1) {
@@ -383,5 +393,10 @@ int PVSetFanManual(int fan, double rpm) {
     // Roll back only the affected fan; other independent targets stay intact.
     int restored = PVRestoreFanAutomatic(fan);
     if (!restored) memcpy(diagnostic, failure, sizeof(diagnostic));
+    else {
+        char rollback[sizeof(diagnostic)];
+        snprintf(rollback, sizeof(rollback), "%s", diagnostic[0] ? diagnostic : "restore failed without SMC detail");
+        snprintf(diagnostic, sizeof(diagnostic), "set: %.175s; restore: %.175s", failure, rollback);
+    }
     return restored == 0 ? 4 : 6;
 }

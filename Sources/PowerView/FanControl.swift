@@ -57,7 +57,8 @@ private actor FanSession {
 
     private func command(_ command: String) throws {
         guard let session else { throw FanControlFailure.disconnected }
-        var reply = [CChar](repeating: 0, count: 256)
+        // The helper can include both SET and rollback diagnostics (384 bytes).
+        var reply = [CChar](repeating: 0, count: 512)
         let result = PVFanSessionCommand(session, command, &reply, reply.count)
         guard result == 0 else { close(); throw FanControlFailure.disconnected }
         let response = String(cString: reply)
