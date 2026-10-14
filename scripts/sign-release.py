@@ -97,8 +97,11 @@ try:
     daemon = app / 'Contents/Helpers/PowerFanDaemon'
     installer = app / 'Contents/Helpers/PowerUpdateInstaller'
     for target in [helper, daemon, installer, app]:
+        # This standalone executable has no embedded Info.plist. Re-signing
+        # otherwise replaces its explicit ad-hoc identifier with a generated one.
+        identifier = ['--identifier', 'local.yun.PowerView.UpdateInstaller'] if target == installer else []
         run('codesign', '--force', '--sign', identity, '--keychain', str(keychain),
-            '--options', 'runtime', '--timestamp', str(target))
+            '--options', 'runtime', '--timestamp', *identifier, str(target))
     requirement = f'anchor apple generic and certificate leaf[subject.OU] = "{team}" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
     for target in [helper, daemon, installer, app]:
         run('codesign', '--verify', '--strict', '-R', '=' + requirement, str(target))
