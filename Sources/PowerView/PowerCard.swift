@@ -27,6 +27,7 @@ struct PowerCard: View {
     @ObservedObject var store: PowerStore
     @ObservedObject var fanControl: FanControl
     @ObservedObject var loginLaunch: LoginLaunch
+    @ObservedObject var updater: AppUpdate
     var togglePin: () -> Void
     var close: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -102,10 +103,14 @@ struct PowerCard: View {
                 Image(systemName: "leaf.fill").foregroundStyle(.orange)
                     .help("低电量模式已开启").accessibilityLabel("低电量模式已开启")
             }
+            if updater.release != nil {
+                iconButton("arrow.down.circle.fill", label: updater.menuTitle, action: updater.show)
+            }
             refreshButton
             iconButton(store.pinned ? "pin.fill" : "pin", label: store.pinned ? "取消固定" : "固定为悬浮窗", action: togglePin)
             Menu {
                 Text(AppVersion.menuTitle)
+                Button(updater.menuTitle, action: updater.show)
                 Divider()
                 Button(store.pinned ? "取消固定" : "固定为悬浮窗", action: togglePin)
                 Divider()

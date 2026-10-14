@@ -7,7 +7,7 @@ OUTPUT="$PWD/dist/releases"
 BASENAME="Power-View-${VERSION}-macOS-arm64"
 mkdir -p "$OUTPUT"
 codesign --verify --deep --strict "$APP"
-for binary in "$APP/Contents/MacOS/PowerView" "$APP/Contents/Helpers/PowerFanHelper" "$APP/Contents/Helpers/PowerFanDaemon"; do
+for binary in "$APP/Contents/MacOS/PowerView" "$APP/Contents/Helpers/PowerFanHelper" "$APP/Contents/Helpers/PowerFanDaemon" "$APP/Contents/Helpers/PowerUpdateInstaller"; do
     [[ "$(lipo -archs "$binary")" == "arm64" ]] || { echo "Expected arm64-only binary: $binary" >&2; exit 1; }
 done
 # ditto preserves the app bundle, resource metadata, and executable permissions.

@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     private let store = PowerStore()
     private let fanControl = FanControl()
     private let loginLaunch = LoginLaunch()
+    private let updater = AppUpdate()
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
     private var panel: FloatingPanel?
@@ -59,10 +60,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             showPanel()
         }
         UserDefaults.standard.set(true, forKey: "hasLaunched")
+        updater.beforeInstall = { [weak self] in
+            guard let self else { return }
+            try await self.fanControl.prepareForUpdate()
+        }
+        updater.start()
     }
 
     private var card: PowerCard {
-        PowerCard(store: store, fanControl: fanControl, loginLaunch: loginLaunch, togglePin: { [weak self] in self?.togglePin() }, close: { [weak self] in self?.hidePanel() })
+        PowerCard(store: store, fanControl: fanControl, loginLaunch: loginLaunch, updater: updater, togglePin: { [weak self] in self?.togglePin() }, close: { [weak self] in self?.hidePanel() })
     }
 
     private func updateStatus() {
@@ -82,6 +88,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         if NSApp.currentEvent?.type == .rightMouseUp {
             let menu = NSMenu()
             menu.addItem(withTitle: AppVersion.menuTitle, action: nil, keyEquivalent: "")
+            let update = menu.addItem(withTitle: updater.menuTitle, action: #selector(checkForUpdates), keyEquivalent: "")
+            update.target = self
             menu.addItem(.separator())
             let pin = menu.addItem(withTitle: store.pinned ? "收起悬浮窗" : "固定为悬浮窗", action: #selector(contextTogglePin), keyEquivalent: "")
             pin.target = self
@@ -104,6 +112,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             store.setVisible(true)
         }
     }
+
+    @objc private func checkForUpdates() { updater.show() }
 
     @objc private func contextTogglePin() { togglePin() }
 
@@ -214,6 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !terminating else { return .terminateLater }
         terminating = true
+        updater.willTerminate()
         savePosition?.cancel()
         persistPanelFrame()
         Task {

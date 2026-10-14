@@ -3,6 +3,7 @@ import FanAuthorization
 import FanService
 import ServiceManagement
 import PowerCore
+import UpdateSupport
 
 private enum FanControlFailure: LocalizedError {
     case authorization(Int32), command(String), disconnected
@@ -239,6 +240,24 @@ final class FanControl: ObservableObject {
             if suspendRequested && fan != nil { await restore() }
             busy = false
             onUpdate?()
+        }
+    }
+
+    func prepareForUpdate() async throws {
+        guard !busy, !shuttingDown else { throw UpdateFailure("风扇操作尚未完成，请稍后重试安装更新。") }
+        busy = true
+        suspendRequested = true
+        stopHeartbeat()
+        defer { busy = false }
+        do {
+            try await session.restore()
+            await session.close()
+            await updateOwnership()
+            onUpdate?()
+        } catch {
+            suspendRequested = false
+            await updateOwnership()
+            throw UpdateFailure("风扇尚未恢复系统自动，已取消安装：\(error.localizedDescription)")
         }
     }
 
